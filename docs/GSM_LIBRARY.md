@@ -1151,7 +1151,457 @@ tcp_pbuf_t *tcp_pbuf_dequeue(gsm_tcp_socket_t *socket) {
 
 ---
 
-## 8. LTE 초기화 시퀀스
+## 8. 상세 동작 방식
+
+### 8.1 전체 시스템 동작 개요
+
+GSM 라이브러리는 **Producer-Consumer 패턴** 기반의 3-태스크 구조로 동작합니다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant APP as 🖥️ Application<br/>(lte_init, ntrip)
+    participant QUEUE as 📬 at_cmd_queue
+    participant PRODUCER as 🏭 Producer Task
+    participant UART as 🔌 USART1
+    participant EC25 as 📡 EC25 모듈
+    participant DMA as 💾 DMA2
+    participant CONSUMER as 🔄 Consumer Task
+    participant TCP_TASK as 🌐 TCP Task
+
+    Note over APP,TCP_TASK: 【 Phase 1: 명령 전송 요청 】
+    APP->>QUEUE: xQueueSend(at_cmd)
+    Note over APP: 동기식: sem 생성 후 대기<br/>비동기식: 즉시 리턴
+
+    Note over APP,TCP_TASK: 【 Phase 2: Producer가 AT 명령 전송 】
+    QUEUE->>PRODUCER: xQueueReceive()
+    PRODUCER->>PRODUCER: current_cmd = &at_cmd
+    PRODUCER->>UART: AT+COPS?\r\n
+    PRODUCER->>PRODUCER: xSemaphoreTake(producer_sem)<br/>응답 대기...
+
+    Note over APP,TCP_TASK: 【 Phase 3: EC25 응답 수신 】
+    UART->>EC25: AT+COPS?
+    EC25->>DMA: +COPS: 0,0,"SKT",7\r\nOK\r\n
+    DMA->>DMA: 순환 버퍼에 저장
+
+    Note over APP,TCP_TASK: 【 Phase 4: Consumer가 응답 파싱 】
+    DMA->>CONSUMER: IDLE IRQ → 깨어남
+    CONSUMER->>CONSUMER: gsm_parse_process()
+    CONSUMER->>CONSUMER: handle_urc_cops() 파싱
+    CONSUMER->>CONSUMER: gsm_parse_response() OK 감지
+
+    Note over APP,TCP_TASK: 【 Phase 5: 완료 통지 】
+    CONSUMER->>PRODUCER: xSemaphoreGive(producer_sem)
+    CONSUMER->>APP: xSemaphoreGive(msg.sem)<br/>또는 callback() 호출
+
+    Note over APP,TCP_TASK: 【 Phase 6: TCP 이벤트 (URC) 】
+    EC25->>CONSUMER: +QIURC: "recv",0
+    CONSUMER->>TCP_TASK: event_queue에 추가
+    TCP_TASK->>TCP_TASK: gsm_tcp_read() 호출
+```
+
+### 8.2 AT 명령 생명주기 상세 시퀀스
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CALLER as 📱 Caller Task
+    participant MSG as 📝 gsm_at_cmd_t
+    participant QUEUE as 📬 at_cmd_queue
+    participant PRODUCER as 🏭 Producer Task
+    participant MUTEX as 🔒 cmd_mutex
+    participant CURRENT as 📌 current_cmd
+    participant UART as 🔌 UART TX
+    participant EC25 as 📡 EC25
+    participant CONSUMER as 🔄 Consumer Task
+
+    Note over CALLER,CONSUMER: ━━━ 동기식 AT 명령 실행 ━━━
+
+    rect rgb(230, 245, 255)
+        Note over CALLER,MSG: 1️⃣ 명령 준비
+        CALLER->>MSG: cmd = GSM_CMD_COPS
+        CALLER->>MSG: at_mode = GSM_AT_READ
+        CALLER->>MSG: sem = xSemaphoreCreateBinary()
+        CALLER->>MSG: callback = NULL (동기식)
+    end
+
+    rect rgb(255, 245, 230)
+        Note over CALLER,QUEUE: 2️⃣ 큐에 전송
+        CALLER->>QUEUE: xQueueSend(&msg)
+        CALLER->>CALLER: xSemaphoreTake(sem) 블로킹...
+    end
+
+    rect rgb(230, 255, 230)
+        Note over PRODUCER,CURRENT: 3️⃣ Producer가 명령 수신
+        QUEUE->>PRODUCER: xQueueReceive(&at_cmd)
+        Note over PRODUCER: at_cmd는 Producer 스택 변수
+
+        PRODUCER->>MUTEX: xSemaphoreTake(cmd_mutex)
+        PRODUCER->>CURRENT: current_cmd = &at_cmd
+        PRODUCER->>MSG: memset(&msg, 0) 초기화
+        PRODUCER->>MUTEX: xSemaphoreGive(cmd_mutex)
+    end
+
+    rect rgb(255, 230, 230)
+        Note over PRODUCER,EC25: 4️⃣ AT 명령 전송
+        PRODUCER->>UART: "AT+COPS?\r\n"
+        UART->>EC25: AT+COPS?
+        PRODUCER->>PRODUCER: xSemaphoreTake(producer_sem)<br/>⏳ 응답 대기...
+    end
+
+    EC25->>CONSUMER: +COPS: 0,0,"SKT",7
+    EC25->>CONSUMER: OK
+
+    rect rgb(230, 230, 255)
+        Note over CONSUMER,CURRENT: 5️⃣ 응답 파싱
+        CONSUMER->>CONSUMER: handle_urc_cops()
+        Note over CONSUMER: msg.cops.oper = "SKT"
+        CONSUMER->>CONSUMER: gsm_parse_response()
+        Note over CONSUMER: "OK" 감지 → is_ok = 1
+    end
+
+    rect rgb(255, 255, 200)
+        Note over CONSUMER,CALLER: 6️⃣ 완료 통지 (순서 중요!)
+        CONSUMER->>MUTEX: xSemaphoreTake(cmd_mutex)
+
+        Note over CONSUMER: 백업 생성
+        CONSUMER->>CONSUMER: caller_sem = current_cmd->sem
+        CONSUMER->>CONSUMER: msg_backup = current_cmd->msg
+        CONSUMER->>CURRENT: current_cmd = NULL
+
+        Note over CONSUMER: ① Producer 먼저 깨우기
+        CONSUMER->>PRODUCER: xSemaphoreGive(producer_sem)
+        Note over PRODUCER: 다음 명령 대기 준비
+
+        CONSUMER->>MUTEX: xSemaphoreGive(cmd_mutex)
+
+        Note over CONSUMER: ② Caller 나중에 깨우기
+        CONSUMER->>CALLER: xSemaphoreGive(caller_sem)
+    end
+
+    rect rgb(200, 255, 200)
+        Note over CALLER: 7️⃣ 결과 확인
+        CALLER->>CALLER: vSemaphoreDelete(sem)
+        CALLER->>CALLER: gsm->status.is_ok 확인
+        Note over CALLER: ✅ 성공!
+    end
+```
+
+### 8.3 비동기식 AT 명령 체인 시퀀스
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LTE as 🚀 lte_init
+    participant GSM as 📡 gsm.c
+    participant PRODUCER as 🏭 Producer
+    participant CONSUMER as 🔄 Consumer
+    participant CB1 as 📞 callback_1
+    participant CB2 as 📞 callback_2
+    participant CB3 as 📞 callback_3
+
+    Note over LTE,CB3: LTE 초기화 체인 (비동기 콜백 방식)
+
+    LTE->>GSM: gsm_send_at_cmd(AT, callback_1)
+    Note over LTE: 즉시 리턴!
+
+    GSM->>PRODUCER: Queue에 AT 추가
+    PRODUCER->>PRODUCER: AT\r\n 전송
+    CONSUMER->>CONSUMER: OK 파싱
+    CONSUMER->>CB1: callback_1(gsm, cmd, msg, true)
+
+    rect rgb(230, 245, 255)
+        Note over CB1: 첫 번째 콜백에서 다음 명령 발행
+        CB1->>GSM: gsm_send_at_cmee(2, callback_2)
+    end
+
+    GSM->>PRODUCER: Queue에 CMEE 추가
+    PRODUCER->>PRODUCER: AT+CMEE=2\r\n 전송
+    CONSUMER->>CONSUMER: OK 파싱
+    CONSUMER->>CB2: callback_2(gsm, cmd, msg, true)
+
+    rect rgb(255, 245, 230)
+        Note over CB2: 두 번째 콜백에서 다음 명령 발행
+        CB2->>GSM: gsm_send_at_cmd(CPIN, callback_3)
+    end
+
+    GSM->>PRODUCER: Queue에 CPIN 추가
+    PRODUCER->>PRODUCER: AT+CPIN?\r\n 전송
+    CONSUMER->>CONSUMER: +CPIN: READY 파싱
+    CONSUMER->>CONSUMER: OK 파싱
+    CONSUMER->>CB3: callback_3(gsm, cmd, msg, true)
+
+    rect rgb(230, 255, 230)
+        Note over CB3: SIM 준비 완료
+        CB3->>CB3: msg.cpin.code == "READY"
+        CB3->>LTE: 다음 단계 진행 (APN 설정 등)
+    end
+```
+
+### 8.4 TCP 데이터 송수신 상세 시퀀스
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant APP as 🖥️ Application
+    participant GSM as 📡 gsm.c
+    participant PRODUCER as 🏭 Producer
+    participant EC25 as 📡 EC25
+    participant CONSUMER as 🔄 Consumer
+    participant TCP_TASK as 🌐 TCP Task
+    participant SOCKET as 🔌 Socket
+    participant PBUF as 📦 pbuf 큐
+
+    Note over APP,PBUF: ━━━ TCP 데이터 전송 (QISEND) ━━━
+
+    APP->>GSM: gsm_tcp_send(0, data, 100, NULL)
+
+    rect rgb(255, 245, 230)
+        Note over GSM: pbuf 할당 및 데이터 복사
+        GSM->>GSM: tx_pbuf = tcp_pbuf_alloc(100)
+        GSM->>GSM: memcpy(pbuf->payload, data)
+    end
+
+    GSM->>PRODUCER: AT+QISEND=0,100 (wait_type=PROMPT)
+    PRODUCER->>EC25: AT+QISEND=0,100\r\n
+    EC25->>CONSUMER: >
+
+    rect rgb(230, 255, 230)
+        Note over CONSUMER: '>' 프롬프트 감지
+        CONSUMER->>CONSUMER: current_cmd->tx_pbuf 확인
+        CONSUMER->>EC25: [100 bytes 바이너리 데이터]
+        CONSUMER->>CONSUMER: wait_type = EXPECTED
+    end
+
+    EC25->>CONSUMER: SEND OK
+    CONSUMER->>CONSUMER: is_ok = 1
+    CONSUMER->>GSM: tcp_pbuf_free(tx_pbuf)
+    CONSUMER->>APP: sem Give 또는 callback
+
+    Note over APP,PBUF: ━━━ TCP 데이터 수신 (+QIURC → QIRD) ━━━
+
+    EC25->>CONSUMER: +QIURC: "recv",0
+    CONSUMER->>CONSUMER: handle_urc_qiurc()
+
+    rect rgb(230, 245, 255)
+        Note over CONSUMER,TCP_TASK: 이벤트 큐로 위임
+        CONSUMER->>TCP_TASK: event_queue.send(RECV_NOTIFY, 0)
+    end
+
+    TCP_TASK->>GSM: gsm_tcp_read(0, 1460, callback)
+    GSM->>PRODUCER: AT+QIRD=0,1460
+    PRODUCER->>EC25: AT+QIRD=0,1460\r\n
+    EC25->>CONSUMER: +QIRD: 512
+
+    rect rgb(255, 230, 230)
+        Note over CONSUMER: 바이너리 데이터 읽기 모드
+        CONSUMER->>CONSUMER: is_reading_data = true
+        CONSUMER->>CONSUMER: expected_len = 512
+    end
+
+    EC25->>CONSUMER: [512 bytes 바이너리 데이터]
+    CONSUMER->>CONSUMER: rx_buf에 저장
+    EC25->>CONSUMER: OK
+
+    rect rgb(230, 255, 230)
+        Note over TCP_TASK,PBUF: pbuf 생성 및 큐잉
+        CONSUMER->>TCP_TASK: tcp_read_complete_callback()
+        TCP_TASK->>PBUF: tcp_pbuf_alloc(512)
+        TCP_TASK->>PBUF: memcpy(rx_buf)
+        TCP_TASK->>SOCKET: tcp_pbuf_enqueue(pbuf)
+    end
+
+    SOCKET->>APP: on_recv(0) 콜백
+    APP->>PBUF: tcp_pbuf_dequeue()
+    APP->>APP: 데이터 처리
+    APP->>PBUF: tcp_pbuf_free(pbuf)
+```
+
+### 8.5 +QIURC 이벤트 처리 상세 시퀀스
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SERVER as 🌍 원격 서버
+    participant EC25 as 📡 EC25
+    participant CONSUMER as 🔄 Consumer Task
+    participant EVT_QUEUE as 📬 event_queue
+    participant TCP_TASK as 🌐 TCP Task
+    participant SOCKET as 🔌 Socket
+    participant APP as 🖥️ Application
+
+    Note over SERVER,APP: ━━━ 시나리오 1: 데이터 수신 알림 ━━━
+
+    SERVER->>EC25: TCP 데이터 (1024 bytes)
+    Note over EC25: 내부 버퍼에 저장
+
+    EC25->>CONSUMER: +QIURC: "recv",0
+
+    rect rgb(230, 245, 255)
+        Note over CONSUMER: URC 파싱
+        CONSUMER->>CONSUMER: handle_urc_qiurc()
+        CONSUMER->>CONSUMER: type = "recv"
+        CONSUMER->>CONSUMER: connect_id = 0
+    end
+
+    rect rgb(255, 245, 230)
+        Note over CONSUMER,EVT_QUEUE: Consumer는 직접 처리 안함!
+        CONSUMER->>EVT_QUEUE: xQueueSend(TCP_EVT_RECV_NOTIFY, 0)
+        Note over CONSUMER: 즉시 다음 데이터 파싱 가능
+    end
+
+    EVT_QUEUE->>TCP_TASK: xQueueReceive()
+
+    rect rgb(230, 255, 230)
+        Note over TCP_TASK: TCP Task가 비동기로 처리
+        TCP_TASK->>TCP_TASK: gsm_tcp_read(0, 1460, callback)
+        Note over TCP_TASK: 데이터 읽기 후 pbuf에 저장
+    end
+
+    TCP_TASK->>SOCKET: on_recv(0) 콜백
+    SOCKET->>APP: 데이터 처리
+
+    Note over SERVER,APP: ━━━ 시나리오 2: 연결 종료 알림 ━━━
+
+    SERVER->>EC25: TCP FIN
+    EC25->>CONSUMER: +QIURC: "closed",0
+
+    rect rgb(255, 230, 230)
+        Note over CONSUMER: URC 파싱
+        CONSUMER->>CONSUMER: handle_urc_qiurc()
+        CONSUMER->>CONSUMER: type = "closed"
+        CONSUMER->>EVT_QUEUE: xQueueSend(TCP_EVT_CLOSED_NOTIFY, 0)
+    end
+
+    EVT_QUEUE->>TCP_TASK: xQueueReceive()
+
+    rect rgb(230, 230, 255)
+        Note over TCP_TASK,SOCKET: 소켓 정리
+        TCP_TASK->>SOCKET: tcp_pbuf_free_chain(pbuf_head)
+        TCP_TASK->>SOCKET: state = CLOSED
+        TCP_TASK->>APP: on_close(0) 콜백
+    end
+
+    APP->>APP: 재연결 로직 실행
+```
+
+### 8.6 pbuf 메모리 관리 시퀀스
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         pbuf 메모리 관리 동작 원리                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ★ 실시간 스트리밍(NTRIP)에서의 메모리 오버플로우 방지 전략                  │
+│                                                                              │
+│  [최대 제한: 16KB per socket]                                               │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  정상 상태: pbuf_total_len < 16KB                                    │   │
+│  │                                                                       │   │
+│  │  pbuf_head → [pbuf A] → [pbuf B] → [pbuf C] → NULL ← pbuf_tail      │   │
+│  │               4KB        4KB        4KB                               │   │
+│  │                                                                       │   │
+│  │  total_len = 12KB (여유 있음)                                        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  오버플로우 임박: 새 pbuf D (4KB) 추가 요청                          │   │
+│  │                                                                       │   │
+│  │  현재: 12KB + 새 4KB = 16KB (제한 도달)                              │   │
+│  │                                                                       │   │
+│  │  while (total_len + new_len > 16KB) {                                │   │
+│  │      old = tcp_pbuf_dequeue(socket);  // 가장 오래된 것 제거          │   │
+│  │      tcp_pbuf_free(old);                                             │   │
+│  │  }                                                                    │   │
+│  │                                                                       │   │
+│  │  결과:                                                                │   │
+│  │  pbuf_head → [pbuf B] → [pbuf C] → [pbuf D] → NULL ← pbuf_tail      │   │
+│  │               4KB        4KB        4KB                               │   │
+│  │                                                                       │   │
+│  │  ✓ 오래된 데이터(A) 버림, 최신 데이터(D) 유지                         │   │
+│  │  ✓ RTK 보정 데이터는 최신만 의미있으므로 문제없음                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ★ pbuf 할당/해제 흐름:                                                     │
+│                                                                              │
+│  1. tcp_pbuf_alloc(len)                                                     │
+│     └─ pvPortMalloc(sizeof(tcp_pbuf_t))                                    │
+│     └─ pvPortMalloc(len)  ← payload 별도 할당                               │
+│                                                                              │
+│  2. tcp_pbuf_free(pbuf)                                                     │
+│     └─ vPortFree(pbuf->payload)                                            │
+│     └─ vPortFree(pbuf)                                                     │
+│                                                                              │
+│  3. tcp_pbuf_enqueue(socket, pbuf)                                         │
+│     └─ 오버플로우 체크 → 필요시 dequeue/free                               │
+│     └─ 링크드리스트 tail에 추가                                            │
+│                                                                              │
+│  4. tcp_pbuf_dequeue(socket)                                               │
+│     └─ head에서 제거                                                        │
+│     └─ total_len 감소                                                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.7 동기화 메커니즘 상호작용
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CALLER as 📱 Caller
+    participant QUEUE as 📬 at_cmd_queue
+    participant PRODUCER as 🏭 Producer
+    participant CMD_MUTEX as 🔒 cmd_mutex
+    participant PROD_SEM as 🚦 producer_sem
+    participant CALLER_SEM as 🚦 msg.sem
+    participant CONSUMER as 🔄 Consumer
+
+    Note over CALLER,CONSUMER: ━━━ 동기화 객체별 역할 ━━━
+
+    rect rgb(230, 245, 255)
+        Note over QUEUE: at_cmd_queue<br/>• Caller → Producer 명령 전달<br/>• FIFO 순서 보장 (5개)
+        CALLER->>QUEUE: xQueueSend()
+        QUEUE->>PRODUCER: xQueueReceive()
+    end
+
+    rect rgb(255, 245, 230)
+        Note over CMD_MUTEX: cmd_mutex<br/>• current_cmd 접근 보호<br/>• Producer/Consumer 동시 접근 방지
+        PRODUCER->>CMD_MUTEX: Take → current_cmd 설정 → Give
+        CONSUMER->>CMD_MUTEX: Take → msg 파싱 → Give
+    end
+
+    rect rgb(230, 255, 230)
+        Note over PROD_SEM: producer_sem<br/>• Producer가 응답 대기<br/>• Consumer가 완료 시 Give
+        PRODUCER->>PROD_SEM: Take (블로킹)
+        Note over PRODUCER: ⏳ 응답 대기 중...
+        CONSUMER->>PROD_SEM: Give
+        Note over PRODUCER: ✓ 다음 명령 준비
+    end
+
+    rect rgb(255, 230, 230)
+        Note over CALLER_SEM: msg.sem (동기식만)<br/>• Caller가 결과 대기<br/>• Consumer가 완료 시 Give
+        CALLER->>CALLER_SEM: Take (블로킹)
+        Note over CALLER: ⏳ 결과 대기 중...
+        CONSUMER->>CALLER_SEM: Give
+        Note over CALLER: ✓ 결과 확인 가능
+    end
+
+    Note over CALLER,CONSUMER: ━━━ 세마포어 Give 순서의 중요성 ━━━
+
+    rect rgb(255, 255, 200)
+        Note over CONSUMER: 올바른 순서
+        CONSUMER->>PROD_SEM: ① Give (Producer 먼저)
+        Note over PRODUCER: 다음 명령 큐 대기 시작
+        CONSUMER->>CALLER_SEM: ② Give (Caller 나중에)
+        Note over CALLER: 새 명령 전송 가능
+        Note over CALLER,CONSUMER: ✓ Producer가 이미 준비 → 경합 없음
+    end
+```
+
+---
+
+## 9. LTE 초기화 시퀀스
 
 ### 8.1 전체 초기화 흐름
 
