@@ -51,6 +51,10 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
 
   LOG_INFO("TCP 소켓 생성 완료");
 
+  // ★ 연결 전 소켓 강제 정리 (이전 세션에서 남은 소켓 정리)
+  LOG_INFO("소켓 사전 정리: connect_id=%d", NTRIP_CONNECT_ID);
+  tcp_close_force(sock);
+
   LOG_INFO("NTRIP 서버 연결 시도: %s:%d", NTRIP_SERVER_IP, NTRIP_SERVER_PORT);
   ret = tcp_connect(sock, NTRIP_CONTEXT_ID, NTRIP_SERVER_IP, NTRIP_SERVER_PORT,
                     10000);
