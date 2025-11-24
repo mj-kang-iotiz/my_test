@@ -47,8 +47,8 @@ tcp_socket_t *tcp_socket_create(gsm_t *gsm, uint8_t connect_id) {
   sock->is_closed_by_peer = false;
   sock->default_recv_timeout = 5000; // 기본 5초
 
-  // 수신 큐 생성 (최대 10개 pbuf 저장)
-  sock->rx_queue = xQueueCreate(10, sizeof(tcp_pbuf_t *));
+  // 수신 큐 생성 (최대 20개 pbuf 저장) - NTRIP 고속 수신용
+  sock->rx_queue = xQueueCreate(20, sizeof(tcp_pbuf_t *));
   if (!sock->rx_queue) {
     vPortFree(sock);
     return NULL;
@@ -189,6 +189,23 @@ int tcp_close(tcp_socket_t *sock) {
 
   if (xSemaphoreTake(sock->mutex, portMAX_DELAY) == pdTRUE) {
     sock->is_connected = false;
+    xSemaphoreGive(sock->mutex);
+  }
+
+  return ret;
+}
+
+int tcp_close_force(tcp_socket_t *sock) {
+  if (!sock) {
+    return -1;
+  }
+
+  // ★ 상태 무관 강제 닫기 (에러 566 복구용)
+  int ret = gsm_tcp_close_force(sock->gsm, sock->connect_id);
+
+  if (xSemaphoreTake(sock->mutex, portMAX_DELAY) == pdTRUE) {
+    sock->is_connected = false;
+    sock->is_closed_by_peer = false;
     xSemaphoreGive(sock->mutex);
   }
 

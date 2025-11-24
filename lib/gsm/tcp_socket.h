@@ -82,6 +82,16 @@ int tcp_recv(tcp_socket_t *sock, uint8_t *buf, size_t len, uint32_t timeout_ms);
 int tcp_close(tcp_socket_t *sock);
 
 /**
+ * @brief TCP 연결 강제 종료 (상태 무관)
+ *
+ * QIOPEN 에러 566 등 소켓이 이미 사용 중일 때 사용
+ *
+ * @param sock 소켓 핸들
+ * @return int 0: 성공, -1: 실패
+ */
+int tcp_close_force(tcp_socket_t *sock);
+
+/**
  * @brief TCP 소켓 해제
  *
  * @param sock 소켓 핸들

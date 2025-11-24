@@ -289,6 +289,7 @@ typedef struct {
   tcp_close_callback_t on_close; ///< 연결 종료 콜백
 
   SemaphoreHandle_t open_sem;
+  SemaphoreHandle_t close_sem;   ///< +QICLOSE URC 대기용
 } gsm_tcp_socket_t;
 
 // TCP 버퍼 구조체
@@ -375,6 +376,17 @@ int gsm_tcp_open(gsm_t *gsm, uint8_t connect_id, uint8_t context_id,
  * @return int 0: 성공, -1: 실패
  */
 int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback);
+
+/**
+ * @brief TCP 소켓 강제 닫기 (상태 무관)
+ *
+ * QIOPEN 에러 566 등 복구용. 소켓 상태 확인 없이 바로 AT+QICLOSE 전송
+ *
+ * @param gsm GSM 핸들
+ * @param connect_id 소켓 ID
+ * @return int 0: 성공, -1: 실패
+ */
+int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id);
 
 /**
  * @brief TCP 데이터 전송

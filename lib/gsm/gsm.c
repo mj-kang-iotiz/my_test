@@ -205,14 +205,24 @@ void handle_urc_qiclose(gsm_t *gsm, const char *data, size_t len) {
   if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
     uint8_t cid = target->qiclose.connect_id;
     if (cid < GSM_TCP_MAX_SOCKETS) {
-      // 연결 종료 콜백 호출
-      tcp_close_callback_t on_close = gsm->tcp.sockets[cid].on_close;
+      gsm_tcp_socket_t *socket = &gsm->tcp.sockets[cid];
 
-      gsm->tcp.sockets[cid].state = GSM_TCP_STATE_CLOSED;
-      gsm->tcp.sockets[cid].on_recv = NULL;
-      gsm->tcp.sockets[cid].on_close = NULL;
+      // 연결 종료 콜백 저장
+      tcp_close_callback_t on_close = socket->on_close;
+
+      // ★ close_sem Give (gsm_tcp_close 동기 대기 해제)
+      SemaphoreHandle_t close_sem = socket->close_sem;
+
+      socket->state = GSM_TCP_STATE_CLOSED;
+      socket->on_recv = NULL;
+      socket->on_close = NULL;
 
       xSemaphoreGive(gsm->tcp.tcp_mutex);
+
+      // ★ 뮤텍스 밖에서 세마포어 Give
+      if (close_sem) {
+        xSemaphoreGive(close_sem);
+      }
 
       // 뮤텍스 밖에서 콜백 호출
       if (on_close) {
@@ -935,7 +945,7 @@ void gsm_init(gsm_t *gsm, evt_handler_t handler, void *args) {
   gsm->urc_info_tbl = urc_info_handlers;
 
   gsm->ops = &stm32_hal_ops;
-  gsm->at_cmd_queue = xQueueCreate(5, sizeof(gsm_at_cmd_t));
+  gsm->at_cmd_queue = xQueueCreate(15, sizeof(gsm_at_cmd_t));  // 5 → 15 (NTRIP 고속 수신용)
 
   // TCP 초기화
   gsm_tcp_init(gsm);
@@ -1185,7 +1195,7 @@ void gsm_tcp_init(gsm_t *gsm) {
   memset(&gsm->tcp.buffer, 0, sizeof(gsm_tcp_buffer_t));
 
   // TCP 이벤트 큐 생성
-  gsm->tcp.event_queue = xQueueCreate(10, sizeof(tcp_event_t));
+  gsm->tcp.event_queue = xQueueCreate(20, sizeof(tcp_event_t));  // 10 → 20 (NTRIP 고속 수신용)
 
   // TCP 태스크 생성
   xTaskCreate(gsm_tcp_task, "gsm_tcp", 2048, gsm, tskIDLE_PRIORITY + 3,
@@ -1311,12 +1321,20 @@ int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback) {
 
   // 소켓 상태 확인
   if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
-    if (socket->state != GSM_TCP_STATE_CONNECTED) {
+    // 이미 닫힌 소켓이면 성공으로 처리
+    if (socket->state == GSM_TCP_STATE_CLOSED) {
       xSemaphoreGive(gsm->tcp.tcp_mutex);
-      return -1;
+      return 0;
     }
 
     socket->state = GSM_TCP_STATE_CLOSING;
+
+    // ★ close_sem 생성 (+QICLOSE URC 대기용)
+    if (socket->close_sem) {
+      vSemaphoreDelete(socket->close_sem);
+    }
+    socket->close_sem = xSemaphoreCreateBinary();
+
     xSemaphoreGive(gsm->tcp.tcp_mutex);
   }
 
@@ -1357,11 +1375,124 @@ int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback) {
     vSemaphoreDelete(sem);
 
     if (result != pdTRUE || !gsm->status.is_ok) {
+      // OK 실패 시 close_sem 정리
+      if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+        if (socket->close_sem) {
+          vSemaphoreDelete(socket->close_sem);
+          socket->close_sem = NULL;
+        }
+        xSemaphoreGive(gsm->tcp.tcp_mutex);
+      }
       return -1;
+    }
+
+    // ★★★ OK 받은 후 +QICLOSE URC 대기 ★★★
+    // EC25: AT+QICLOSE → OK → +QICLOSE: <id> (실제 닫힘)
+    result = xSemaphoreTake(socket->close_sem, pdMS_TO_TICKS(5000));
+
+    // close_sem 정리
+    if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+      if (socket->close_sem) {
+        vSemaphoreDelete(socket->close_sem);
+        socket->close_sem = NULL;
+      }
+      xSemaphoreGive(gsm->tcp.tcp_mutex);
+    }
+
+    if (result != pdTRUE) {
+      // +QICLOSE URC 타임아웃 - 강제로 상태 변경
+      LOG_WARN("gsm_tcp_close: +QICLOSE URC 타임아웃, 강제 닫힘 처리");
+      if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+        socket->state = GSM_TCP_STATE_CLOSED;
+        xSemaphoreGive(gsm->tcp.tcp_mutex);
+      }
     }
 
     return 0;
   }
+}
+
+int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id) {
+  if (!gsm || connect_id >= GSM_TCP_MAX_SOCKETS) {
+    return -1;
+  }
+
+  gsm_tcp_socket_t *socket = &gsm->tcp.sockets[connect_id];
+
+  LOG_INFO("gsm_tcp_close_force: connect_id=%d 강제 닫기 시작", connect_id);
+
+  // ★ 상태 무관 강제 닫기 - close_sem 생성
+  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+    socket->state = GSM_TCP_STATE_CLOSING;
+
+    if (socket->close_sem) {
+      vSemaphoreDelete(socket->close_sem);
+    }
+    socket->close_sem = xSemaphoreCreateBinary();
+
+    xSemaphoreGive(gsm->tcp.tcp_mutex);
+  }
+
+  // AT+QICLOSE=<connectID>,0 (타임아웃 0 = 즉시)
+  gsm_at_cmd_t msg = {
+      .at_mode = GSM_AT_WRITE,
+      .cmd = GSM_CMD_QICLOSE,
+      .wait_type = GSM_WAIT_NONE,
+      .callback = NULL,
+      .sem = NULL,
+      .tx_pbuf = NULL,
+  };
+
+  snprintf(msg.params, GSM_AT_CMD_PARAM_SIZE, "%d,0", connect_id);
+
+  gsm->status.is_ok = 0;
+  gsm->status.is_err = 0;
+  gsm->status.is_timeout = 0;
+
+  msg.sem = xSemaphoreCreateBinary();
+  SemaphoreHandle_t sem = msg.sem;
+
+  xQueueSend(gsm->at_cmd_queue, &msg, portMAX_DELAY);
+
+  // OK 대기
+  TickType_t timeout_ticks = pdMS_TO_TICKS(11000);
+  BaseType_t result = xSemaphoreTake(sem, timeout_ticks);
+  vSemaphoreDelete(sem);
+
+  if (result != pdTRUE) {
+    LOG_ERR("gsm_tcp_close_force: OK 타임아웃");
+    // close_sem 정리
+    if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+      if (socket->close_sem) {
+        vSemaphoreDelete(socket->close_sem);
+        socket->close_sem = NULL;
+      }
+      socket->state = GSM_TCP_STATE_CLOSED;
+      xSemaphoreGive(gsm->tcp.tcp_mutex);
+    }
+    return -1;
+  }
+
+  // ★★★ OK 받은 후 +QICLOSE URC 대기 ★★★
+  LOG_INFO("gsm_tcp_close_force: OK 수신, +QICLOSE URC 대기 중...");
+  result = xSemaphoreTake(socket->close_sem, pdMS_TO_TICKS(5000));
+
+  // close_sem 정리
+  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+    if (socket->close_sem) {
+      vSemaphoreDelete(socket->close_sem);
+      socket->close_sem = NULL;
+    }
+
+    if (result != pdTRUE) {
+      LOG_WARN("gsm_tcp_close_force: +QICLOSE URC 타임아웃, 강제 닫힘 처리");
+      socket->state = GSM_TCP_STATE_CLOSED;
+    }
+    xSemaphoreGive(gsm->tcp.tcp_mutex);
+  }
+
+  LOG_INFO("gsm_tcp_close_force: 완료");
+  return 0;
 }
 
 int gsm_tcp_send(gsm_t *gsm, uint8_t connect_id, const uint8_t *data,
