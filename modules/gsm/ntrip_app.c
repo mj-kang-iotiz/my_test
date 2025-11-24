@@ -175,31 +175,32 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
       ret = tcp_recv(sock, recv_buf, sizeof(recv_buf), 0);
 
       if (ret > 0) {
-        // 수신 성공
-        LOG_INFO("수신 데이터 (%d bytes):", ret);
+        // ★ GPS로 즉시 전송 (오버플로우 방지)
+        gps_handle->ops->send((const char *)recv_buf, ret);
 
-        // 데이터를 16진수로 출력
+#if NTRIP_DEBUG_HEXDUMP
+        // 디버그 모드: 16진수 덤프 (프로덕션에서는 비활성화 권장)
+        LOG_INFO("NTRIP RX (%d bytes):", ret);
         for (int i = 0; i < ret; i += 16) {
           char hex_str[64] = {0};
           char ascii_str[20] = {0};
           int line_len = (ret - i) > 16 ? 16 : (ret - i);
 
-          // 16진수 문자열 생성
           for (int j = 0; j < line_len; j++) {
             sprintf(&hex_str[j * 3], "%02X ", recv_buf[i + j]);
-
-            // ASCII 출력용 (출력 가능한 문자만)
             if (recv_buf[i + j] >= 0x20 && recv_buf[i + j] <= 0x7E) {
               ascii_str[j] = recv_buf[i + j];
             } else {
               ascii_str[j] = '.';
             }
           }
-
-          gps_handle->ops->send((const char *)recv_buf, ret);
-
           LOG_INFO("  %04X: %-48s | %s", i, hex_str, ascii_str);
         }
+#else
+        // 프로덕션 모드: 간단한 로그만
+        LOG_DEBUG("NTRIP RX: %d bytes", ret);
+#endif
+
       } else if (ret == 0) {
         // 타임아웃 (10초 동안 데이터 없음)
         LOG_DEBUG("수신 타임아웃 (정상 - keep-alive 동작 중)");

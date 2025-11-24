@@ -8,6 +8,9 @@
 #define NTRIP_RECONNECT_DELAY_MAX 60000     // 최대 재연결 대기 시간 (60초)
 #define NTRIP_RECONNECT_BACKOFF_MULTIPLIER 2 // 백오프 배율 (지수 백오프)
 
+// NTRIP 디버그 설정
+#define NTRIP_DEBUG_HEXDUMP 0  // 1: 16진수 덤프 활성화 (느림), 0: 비활성화 (권장)
+
 /**
  * @brief NTRIP TCP 수신 태스크 생성
  *
