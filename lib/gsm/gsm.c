@@ -464,6 +464,7 @@ const gsm_at_cmd_entry_t gsm_at_cmd_handlers[] = {
     {GSM_CMD_QIRD, "AT+QIRD", "+QIRD: ", 5000},
     {GSM_CMD_QISDE, "AT+QISDE", "+QISDE: ", 300},
     {GSM_CMD_QISTATE, "AT+QISTATE", "+QISTATE: ", 300},
+    {GSM_CMD_QICFG, "AT+QICFG", "+QICFG: ", 300},
 
     {GSM_CMD_NONE, NULL, NULL, 0}};
 
@@ -1525,4 +1526,26 @@ void gsm_send_at_qistate(gsm_t *gsm, uint8_t query_type, uint8_t connect_id,
   // AT+QISTATE=<query_type>,<contextID 또는 connectID>
   snprintf(params, sizeof(params), "%d,%d", query_type, connect_id);
   gsm_send_at_cmd(gsm, GSM_CMD_QISTATE, GSM_AT_WRITE, params, callback);
+}
+
+/**
+ * @brief AT+QICFG 전송 (TCP keep-alive 설정)
+ *
+ * AT+QICFG="tcp/keepalive",<connectID>,<keepalive_en>,<keepidle>,<keepinterval>,<keepcount>
+ *
+ * 예: AT+QICFG="tcp/keepalive",0,1,60,10,3
+ *     - 소켓 0번에 대해 keep-alive 활성화
+ *     - 60초 idle 후 첫 probe 전송
+ *     - 10초 간격으로 probe 전송
+ *     - 3회 실패 시 연결 종료
+ */
+void gsm_send_at_qicfg_keepalive(gsm_t *gsm, uint8_t connect_id, uint8_t enable,
+                                  uint16_t keepidle, uint16_t keepinterval,
+                                  uint8_t keepcount, at_cmd_handler callback) {
+  char params[64] = {0};
+
+  // AT+QICFG="tcp/keepalive",<connectID>,<keepalive_en>,<keepidle>,<keepinterval>,<keepcount>
+  snprintf(params, sizeof(params), "\"tcp/keepalive\",%d,%d,%d,%d,%d",
+           connect_id, enable, keepidle, keepinterval, keepcount);
+  gsm_send_at_cmd(gsm, GSM_CMD_QICFG, GSM_AT_WRITE, params, callback);
 }
