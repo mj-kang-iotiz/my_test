@@ -54,19 +54,17 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
   LOG_INFO("NTRIP 서버 연결 시도: %s:%d", NTRIP_SERVER_IP, NTRIP_SERVER_PORT);
   ret = tcp_connect(sock, NTRIP_CONTEXT_ID, NTRIP_SERVER_IP, NTRIP_SERVER_PORT,
                     10000);
-  if (ret != 0) {
-    LOG_ERR("TCP 연결 실패: %d", ret);
-    tcp_socket_destroy(sock);
-    vTaskDelete(NULL);
-    return;
-  } else if (tcp_get_socket_state(sock, 0) != GSM_TCP_STATE_CONNECTED) {
-    tcp_close(sock);
+  if (ret != 0 || tcp_get_socket_state(sock, 0) != GSM_TCP_STATE_CONNECTED) {
+    // 연결 실패 시 QICLOSE가 비동기로 처리되므로 대기 필요
+    LOG_ERR("TCP 연결 실패: ret=%d, 소켓 정리 대기 후 재시도", ret);
+    vTaskDelay(pdMS_TO_TICKS(2000)); // QICLOSE 완료 대기
+
     LOG_INFO("NTRIP 서버 연결 재시도: %s:%d", NTRIP_SERVER_IP,
              NTRIP_SERVER_PORT);
     ret = tcp_connect(sock, NTRIP_CONTEXT_ID, NTRIP_SERVER_IP,
                       NTRIP_SERVER_PORT, 10000);
-    if (ret != 0) {
-      LOG_ERR("TCP 연결 실패: %d", ret);
+    if (ret != 0 || tcp_get_socket_state(sock, 0) != GSM_TCP_STATE_CONNECTED) {
+      LOG_ERR("TCP 연결 재시도 실패: %d", ret);
       tcp_socket_destroy(sock);
       vTaskDelete(NULL);
       return;

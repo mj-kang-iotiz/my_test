@@ -168,8 +168,16 @@ void handle_urc_qiopen(gsm_t *gsm, const char *data, size_t len) {
           gsm->evt_handler.handler(GSM_EVT_TCP_CONNECTED, &cid);
         }
       } else {
-        // 연결 실패
+        // 연결 실패 - 소켓 강제 정리 필요
+        LOG_ERR("QIOPEN 실패: connect_id=%d, err=%d - 소켓 강제 닫기 요청",
+                cid, target->qiopen.result);
         socket->state = GSM_TCP_STATE_CLOSED;
+
+        // ★ 모뎀 측 소켓 정리를 위해 QICLOSE 이벤트 전송
+        tcp_event_t evt = {.type = TCP_EVT_CLOSE_FORCE, .connect_id = cid};
+        if (xQueueSend(gsm->tcp.event_queue, &evt, 0) != pdTRUE) {
+          LOG_ERR("QIOPEN 실패: 강제 닫기 이벤트 큐 전송 실패");
+        }
       }
 
       if (socket->open_sem) {
@@ -1103,6 +1111,19 @@ static void tcp_read_complete_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
  * - +QIURC: "closed" 이벤트 수신 시 소켓 정리
  * - 데드락 방지: 별도 태스크이므로 동기 함수 호출 가능
  */
+/**
+ * @brief QICLOSE 완료 콜백 (강제 닫기용)
+ */
+static void tcp_close_force_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
+                                     bool is_ok) {
+  if (is_ok) {
+    LOG_INFO("강제 소켓 닫기 성공");
+  } else {
+    LOG_ERR("강제 소켓 닫기 실패 (무시)");
+  }
+  // 에러가 발생해도 무시 - 이미 닫혀있을 수 있음
+}
+
 static void gsm_tcp_task(void *arg) {
   gsm_t *gsm = (gsm_t *)arg;
   tcp_event_t evt;
@@ -1145,6 +1166,21 @@ static void gsm_tcp_task(void *arg) {
           } else {
             xSemaphoreGive(gsm->tcp.tcp_mutex);
           }
+        }
+        break;
+      }
+
+      case TCP_EVT_CLOSE_FORCE: {
+        // ★ QIOPEN 실패 등으로 인한 강제 소켓 닫기
+        // 모뎀 측 소켓 자원을 정리하기 위해 AT+QICLOSE 전송
+        if (evt.connect_id < GSM_TCP_MAX_SOCKETS) {
+          LOG_INFO("강제 소켓 닫기 시작: connect_id=%d", evt.connect_id);
+
+          // AT+QICLOSE=<connectID>,0 (비동기 전송)
+          char params[8] = {0};
+          snprintf(params, sizeof(params), "%d,0", evt.connect_id);
+          gsm_send_at_cmd(gsm, GSM_CMD_QICLOSE, GSM_AT_WRITE, params,
+                          tcp_close_force_callback);
         }
         break;
       }
