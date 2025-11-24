@@ -10,6 +10,100 @@
 
 #define TAG "GSM"
 
+//=============================================================================
+// 소켓 상태 모니터링
+//=============================================================================
+#define SOCKET_STATE_CHECK_INTERVAL_MS 10000  // 10초마다 상태 확인
+
+static TimerHandle_t socket_state_timer = NULL;
+static TickType_t last_recv_tick[GSM_TCP_MAX_SOCKETS] = {0};
+
+// 소켓 상태 문자열 변환
+static const char* socket_state_to_str(uint8_t state) {
+  switch (state) {
+    case 0: return "Initial";
+    case 1: return "Opening";
+    case 2: return "Connected";
+    case 3: return "Listening";
+    case 4: return "Closing";
+    default: return "Unknown";
+  }
+}
+
+// QISTATE 응답 콜백
+static void socket_state_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg, bool is_ok) {
+  if (!is_ok) {
+    LOG_WARN("소켓 상태 확인 실패 (응답 없음 또는 에러)");
+    return;
+  }
+
+  if (!msg || cmd != GSM_CMD_QISTATE) {
+    LOG_DEBUG("소켓 상태: 활성 소켓 없음");
+    return;
+  }
+
+  gsm_msg_t *m = (gsm_msg_t *)msg;
+
+  LOG_INFO("=== 소켓 상태 [ID:%d] ===", m->qistate.connect_id);
+  LOG_INFO("  상태: %s (%d)", socket_state_to_str(m->qistate.socket_state), m->qistate.socket_state);
+  LOG_INFO("  서비스: %s", m->qistate.service_type);
+  LOG_INFO("  원격: %s:%d", m->qistate.remote_ip, m->qistate.remote_port);
+  LOG_INFO("  로컬포트: %d", m->qistate.local_port);
+  LOG_INFO("  Context: %d, Access: %d", m->qistate.context_id, m->qistate.access_mode);
+
+  // 마지막 수신 시간 확인
+  uint8_t cid = m->qistate.connect_id;
+  if (cid < GSM_TCP_MAX_SOCKETS && last_recv_tick[cid] != 0) {
+    TickType_t now = xTaskGetTickCount();
+    uint32_t elapsed_ms = (now - last_recv_tick[cid]) * portTICK_PERIOD_MS;
+    LOG_INFO("  마지막 수신: %lu초 전", elapsed_ms / 1000);
+
+    // 경고: 30초 이상 데이터 없음
+    if (elapsed_ms > 30000 && m->qistate.socket_state == 2) {
+      LOG_WARN("  ⚠️ 30초 이상 데이터 수신 없음!");
+    }
+  }
+}
+
+// 타이머 콜백 - 소켓 상태 확인 요청
+static void socket_state_timer_callback(TimerHandle_t xTimer) {
+  // 비동기로 상태 확인 (connect_id=0 기준)
+  gsm_send_at_qistate(&gsm_handle, 1, 0, socket_state_check_callback);
+}
+
+// 소켓 상태 모니터링 시작
+void gsm_socket_monitor_start(void) {
+  if (socket_state_timer == NULL) {
+    socket_state_timer = xTimerCreate(
+      "sock_mon",
+      pdMS_TO_TICKS(SOCKET_STATE_CHECK_INTERVAL_MS),
+      pdTRUE,  // auto-reload
+      NULL,
+      socket_state_timer_callback
+    );
+  }
+
+  if (socket_state_timer != NULL) {
+    xTimerStart(socket_state_timer, 0);
+    LOG_INFO("소켓 상태 모니터링 시작 (주기: %dms)", SOCKET_STATE_CHECK_INTERVAL_MS);
+  }
+}
+
+// 소켓 상태 모니터링 중지
+void gsm_socket_monitor_stop(void) {
+  if (socket_state_timer != NULL) {
+    xTimerStop(socket_state_timer, 0);
+    LOG_INFO("소켓 상태 모니터링 중지");
+  }
+}
+
+// 수신 시간 업데이트 (외부에서 호출)
+void gsm_socket_update_recv_time(uint8_t connect_id) {
+  if (connect_id < GSM_TCP_MAX_SOCKETS) {
+    last_recv_tick[connect_id] = xTaskGetTickCount();
+  }
+}
+
 /**
  * ============================================================================
  * AT 커맨드 처리 아키텍처 설명
