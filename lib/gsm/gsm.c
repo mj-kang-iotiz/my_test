@@ -1118,13 +1118,17 @@ static void gsm_tcp_task(void *arg) {
   tcp_event_t evt;
 
   while (1) {
-    if (xQueueReceive(gsm->tcp.event_queue, &evt, portMAX_DELAY) == pdTRUE) {
+    // ★ 100ms 타임아웃으로 이벤트 대기 (주기적 폴링 가능)
+    if (xQueueReceive(gsm->tcp.event_queue, &evt, pdMS_TO_TICKS(100)) == pdTRUE) {
       switch (evt.type) {
       case TCP_EVT_RECV_NOTIFY: {
-        // ✅ 여기서는 동기 호출 불가능! (데드락 위험)
-        // ✅ 비동기 콜백 사용
+        // ✅ 비동기 콜백 사용 (AT 큐 가득 차면 스킵)
         if (evt.connect_id < GSM_TCP_MAX_SOCKETS) {
-          gsm_tcp_read(gsm, evt.connect_id, 1460, tcp_read_complete_callback);
+          if (gsm_tcp_read(gsm, evt.connect_id, 1460, tcp_read_complete_callback) != 0) {
+            // AT 큐 가득 참 - 잠시 대기 후 이벤트 다시 큐에 넣기
+            vTaskDelay(pdMS_TO_TICKS(50));
+            xQueueSendToFront(gsm->tcp.event_queue, &evt, 0);
+          }
         }
         break;
       }
@@ -1591,7 +1595,11 @@ int gsm_tcp_read(gsm_t *gsm, uint8_t connect_id, size_t max_len,
   snprintf(msg.params, GSM_AT_CMD_PARAM_SIZE, "%d,%u", connect_id, max_len);
 
   if (callback) {
-    xQueueSend(gsm->at_cmd_queue, &msg, portMAX_DELAY);
+    // ★ 비동기: AT 큐 공간 없으면 즉시 실패 (블로킹 방지)
+    if (xQueueSend(gsm->at_cmd_queue, &msg, pdMS_TO_TICKS(100)) != pdTRUE) {
+      LOG_WARN("gsm_tcp_read: AT 큐 가득 참, 스킵");
+      return -1;  // 다음 recv 이벤트에서 재시도됨
+    }
     return 0;
   } else {
     gsm->status.is_ok = 0;
