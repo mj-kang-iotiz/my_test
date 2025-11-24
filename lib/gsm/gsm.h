@@ -378,6 +378,19 @@ int gsm_tcp_open(gsm_t *gsm, uint8_t connect_id, uint8_t context_id,
 int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback);
 
 /**
+ * @brief TCP 소켓 강제 닫기 (상태 무관)
+ *
+ * QIOPEN 실패 등으로 연결이 안 된 상태에서도 AT+QICLOSE를 전송하여
+ * 모뎀 측 소켓 자원을 정리합니다.
+ *
+ * @param gsm GSM 핸들
+ * @param connect_id 소켓 ID
+ * @param callback AT 명령 완료 콜백 (NULL이면 동기식)
+ * @return int 0: 성공, -1: 실패
+ */
+int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback);
+
+/**
  * @brief TCP 데이터 전송
  *
  * @param gsm GSM 핸들

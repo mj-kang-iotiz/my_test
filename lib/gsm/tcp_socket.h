@@ -82,6 +82,17 @@ int tcp_recv(tcp_socket_t *sock, uint8_t *buf, size_t len, uint32_t timeout_ms);
 int tcp_close(tcp_socket_t *sock);
 
 /**
+ * @brief TCP 연결 강제 종료 (상태 무관)
+ *
+ * QIOPEN 실패 등으로 연결이 안 된 상태에서도 AT+QICLOSE를 전송하여
+ * 모뎀 측 소켓 자원을 정리합니다.
+ *
+ * @param sock 소켓 핸들
+ * @return int 0: 성공, -1: 실패
+ */
+int tcp_close_force(tcp_socket_t *sock);
+
+/**
  * @brief TCP 소켓 해제
  *
  * @param sock 소켓 핸들

@@ -1400,6 +1400,68 @@ int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback) {
   }
 }
 
+int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id,
+                        at_cmd_handler callback) {
+  if (!gsm || connect_id >= GSM_TCP_MAX_SOCKETS) {
+    return -1;
+  }
+
+  // ★ 상태 체크 없이 무조건 QICLOSE 전송
+  // QIOPEN 실패 등으로 소켓이 CLOSED 상태여도 모뎀 측 자원 정리 필요
+
+  // 소켓 상태를 CLOSING으로 설정 (선택적)
+  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+    gsm->tcp.sockets[connect_id].state = GSM_TCP_STATE_CLOSING;
+    xSemaphoreGive(gsm->tcp.tcp_mutex);
+  }
+
+  // AT+QICLOSE=<connectID>,<timeout>
+  gsm_at_cmd_t msg = {
+      .at_mode = GSM_AT_WRITE,
+      .cmd = GSM_CMD_QICLOSE,
+      .wait_type = GSM_WAIT_NONE,
+      .callback = callback,
+      .sem = NULL,
+      .tx_pbuf = NULL,
+  };
+
+  snprintf(msg.params, GSM_AT_CMD_PARAM_SIZE, "%d,0", connect_id);
+
+  if (callback) {
+    xQueueSend(gsm->at_cmd_queue, &msg, portMAX_DELAY);
+    return 0;
+  } else {
+    gsm->status.is_ok = 0;
+    gsm->status.is_err = 0;
+    gsm->status.is_timeout = 0;
+
+    msg.sem = xSemaphoreCreateBinary();
+    SemaphoreHandle_t sem = msg.sem;
+
+    xQueueSend(gsm->at_cmd_queue, &msg, portMAX_DELAY);
+
+    uint32_t timeout_ms = gsm->at_tbl[GSM_CMD_QICLOSE].timeout_ms;
+    if (timeout_ms == 0)
+      timeout_ms = 10000;
+    timeout_ms += 1000;
+
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    BaseType_t result = xSemaphoreTake(sem, timeout_ticks);
+
+    vSemaphoreDelete(sem);
+
+    // 소켓 상태 초기화 (성공/실패 무관)
+    if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+      gsm->tcp.sockets[connect_id].state = GSM_TCP_STATE_CLOSED;
+      xSemaphoreGive(gsm->tcp.tcp_mutex);
+    }
+
+    // 에러가 발생해도 0 리턴 (이미 닫혀있을 수 있음)
+    (void)result;
+    return 0;
+  }
+}
+
 int gsm_tcp_send(gsm_t *gsm, uint8_t connect_id, const uint8_t *data,
                  size_t len, at_cmd_handler callback) {
   if (!gsm || connect_id >= GSM_TCP_MAX_SOCKETS || !data || len == 0 ||
