@@ -1411,6 +1411,8 @@ int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id,
     return -1;
   }
 
+  LOG_INFO(">>> gsm_tcp_close_force 시작: connect_id=%d", connect_id);
+
   // ★ 상태 체크 없이 무조건 QICLOSE 전송
   // QIOPEN 실패 등으로 소켓이 CLOSED 상태여도 모뎀 측 자원 정리 필요
 
@@ -1433,9 +1435,12 @@ int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id,
   snprintf(msg.params, GSM_AT_CMD_PARAM_SIZE, "%d,0", connect_id);
 
   if (callback) {
+    LOG_INFO(">>> AT+QICLOSE=%s (비동기)", msg.params);
     xQueueSend(gsm->at_cmd_queue, &msg, portMAX_DELAY);
     return 0;
   } else {
+    LOG_INFO(">>> AT+QICLOSE=%s (동기) - 대기 시작", msg.params);
+
     gsm->status.is_ok = 0;
     gsm->status.is_err = 0;
     gsm->status.is_timeout = 0;
@@ -1454,6 +1459,9 @@ int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id,
     BaseType_t result = xSemaphoreTake(sem, timeout_ticks);
 
     vSemaphoreDelete(sem);
+
+    LOG_INFO(">>> AT+QICLOSE 대기 완료: result=%d, is_ok=%d, is_err=%d",
+             result == pdTRUE, gsm->status.is_ok, gsm->status.is_err);
 
     // 소켓 상태 초기화 (성공/실패 무관)
     if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
