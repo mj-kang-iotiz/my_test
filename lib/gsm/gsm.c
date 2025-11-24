@@ -1332,6 +1332,11 @@ int gsm_tcp_open(gsm_t *gsm, uint8_t connect_id, uint8_t context_id,
     }
 
     if (result != pdTRUE || socket->state != GSM_TCP_STATE_CONNECTED) {
+      // ★ +QIOPEN URC에서 에러 코드를 받은 경우 (예: 566)
+      // 소켓 상태는 이미 CLOSED로 설정됨
+      LOG_ERR("QIOPEN 실패: socket->state=%d (expected=%d)",
+              socket->state, GSM_TCP_STATE_CONNECTED);
+      return -1;
     }
 
     return 0;
