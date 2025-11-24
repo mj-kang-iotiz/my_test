@@ -101,10 +101,12 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     ret = tcp_recv(sock, recv_buf, sizeof(recv_buf), 0);
 
     if (ret > 0) {
-      // 수신 성공
+      // 수신 성공 - GPS로 데이터 전송 (한 번만!)
+      gps_handle->ops->send((const char*)recv_buf, ret);
+
       LOG_INFO("수신 데이터 (%d bytes):", ret);
 
-      // 데이터를 16진수로 출력
+      // 데이터를 16진수로 출력 (디버그용)
       for (int i = 0; i < ret; i += 16) {
         char hex_str[64] = {0};
         char ascii_str[20] = {0};
@@ -121,8 +123,6 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
             ascii_str[j] = '.';
           }
         }
-
-        gps_handle->ops->send((const char*)recv_buf, ret);
 
         LOG_INFO("  %04X: %-48s | %s", i, hex_str, ascii_str);
       }
