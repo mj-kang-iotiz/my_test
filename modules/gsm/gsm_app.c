@@ -11,12 +11,14 @@
 #define TAG "GSM"
 
 //=============================================================================
-// 소켓 상태 모니터링
+// 소켓 상태 모니터링 (AT 커맨드 동작 확인 + 소켓 상태)
 //=============================================================================
 #define SOCKET_STATE_CHECK_INTERVAL_MS 10000  // 10초마다 상태 확인
 
 static TimerHandle_t socket_state_timer = NULL;
 static TickType_t last_recv_tick[GSM_TCP_MAX_SOCKETS] = {0};
+static TickType_t last_qistate_request_tick = 0;  // 요청 시간 기록
+static uint32_t qistate_timeout_count = 0;        // 연속 타임아웃 횟수
 
 // 소켓 상태 문자열 변환
 static const char* socket_state_to_str(uint8_t state) {
@@ -32,41 +34,56 @@ static const char* socket_state_to_str(uint8_t state) {
 
 // QISTATE 응답 콜백
 static void socket_state_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg, bool is_ok) {
+  TickType_t now = xTaskGetTickCount();
+  uint32_t response_time_ms = (now - last_qistate_request_tick) * portTICK_PERIOD_MS;
+
   if (!is_ok) {
-    LOG_WARN("소켓 상태 확인 실패 (응답 없음 또는 에러)");
+    qistate_timeout_count++;
+    LOG_ERR("❌ AT 커맨드 응답 실패! (연속 %lu회)", qistate_timeout_count);
+    LOG_ERR("   → 데드락 또는 모뎀 응답 없음 의심");
+
+    if (qistate_timeout_count >= 3) {
+      LOG_ERR("🚨 AT 커맨드 3회 연속 실패 - 시스템 점검 필요!");
+    }
     return;
   }
 
+  // 응답 성공 - 카운터 리셋
+  qistate_timeout_count = 0;
+  LOG_INFO("✅ AT 응답 정상 (응답시간: %lums)", response_time_ms);
+
   if (!msg || cmd != GSM_CMD_QISTATE) {
-    LOG_DEBUG("소켓 상태: 활성 소켓 없음");
+    LOG_INFO("   소켓 상태: 활성 소켓 없음");
     return;
   }
 
   gsm_msg_t *m = (gsm_msg_t *)msg;
 
-  LOG_INFO("=== 소켓 상태 [ID:%d] ===", m->qistate.connect_id);
-  LOG_INFO("  상태: %s (%d)", socket_state_to_str(m->qistate.socket_state), m->qistate.socket_state);
-  LOG_INFO("  서비스: %s", m->qistate.service_type);
-  LOG_INFO("  원격: %s:%d", m->qistate.remote_ip, m->qistate.remote_port);
-  LOG_INFO("  로컬포트: %d", m->qistate.local_port);
-  LOG_INFO("  Context: %d, Access: %d", m->qistate.context_id, m->qistate.access_mode);
+  LOG_INFO("   [소켓 %d] %s | %s:%d | 상태: %s",
+           m->qistate.connect_id,
+           m->qistate.service_type,
+           m->qistate.remote_ip,
+           m->qistate.remote_port,
+           socket_state_to_str(m->qistate.socket_state));
 
   // 마지막 수신 시간 확인
   uint8_t cid = m->qistate.connect_id;
   if (cid < GSM_TCP_MAX_SOCKETS && last_recv_tick[cid] != 0) {
-    TickType_t now = xTaskGetTickCount();
     uint32_t elapsed_ms = (now - last_recv_tick[cid]) * portTICK_PERIOD_MS;
-    LOG_INFO("  마지막 수신: %lu초 전", elapsed_ms / 1000);
+    LOG_INFO("   마지막 데이터 수신: %lu초 전", elapsed_ms / 1000);
 
     // 경고: 30초 이상 데이터 없음
     if (elapsed_ms > 30000 && m->qistate.socket_state == 2) {
-      LOG_WARN("  ⚠️ 30초 이상 데이터 수신 없음!");
+      LOG_WARN("   ⚠️ 30초 이상 데이터 수신 없음!");
     }
   }
 }
 
 // 타이머 콜백 - 소켓 상태 확인 요청
 static void socket_state_timer_callback(TimerHandle_t xTimer) {
+  last_qistate_request_tick = xTaskGetTickCount();
+  LOG_DEBUG("📡 AT+QISTATE 요청 전송...");
+
   // 비동기로 상태 확인 (connect_id=0 기준)
   gsm_send_at_qistate(&gsm_handle, 1, 0, socket_state_check_callback);
 }
@@ -84,6 +101,7 @@ void gsm_socket_monitor_start(void) {
   }
 
   if (socket_state_timer != NULL) {
+    qistate_timeout_count = 0;
     xTimerStart(socket_state_timer, 0);
     LOG_INFO("소켓 상태 모니터링 시작 (주기: %dms)", SOCKET_STATE_CHECK_INTERVAL_MS);
   }
