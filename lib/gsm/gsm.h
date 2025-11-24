@@ -300,7 +300,7 @@ typedef struct {
   size_t tx_len;                          ///< TX 버퍼 사용 길이
 
   // QIRD 응답 파싱 중 상태
-  bool is_reading_data;       ///< TCP 데이터 읽기 중 플래그
+  volatile bool is_reading_data; ///< TCP 데이터 읽기 중 플래그 (atomic 접근)
   size_t expected_data_len;   ///< 예상 데이터 길이
   size_t read_data_len;       ///< 읽은 데이터 길이
   uint8_t current_connect_id; ///< 현재 읽기 중인 소켓 ID

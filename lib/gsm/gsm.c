@@ -294,16 +294,13 @@ void handle_urc_qird(gsm_t *gsm, const char *data, size_t len) {
   target->qird.read_actual_length = parse_uint32(&p);
   target->qird.connect_id = connect_id;
 
-  // TCP 버퍼 읽기 모드 활성화
-  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
-    gsm->tcp.buffer.is_reading_data = true;
-    gsm->tcp.buffer.expected_data_len = target->qird.read_actual_length;
-    gsm->tcp.buffer.read_data_len = 0;
-    gsm->tcp.buffer.rx_len = 0;
-    gsm->tcp.buffer.current_connect_id = connect_id;
-
-    xSemaphoreGive(gsm->tcp.tcp_mutex);
-  }
+  // ★ TCP 버퍼 읽기 모드 활성화 (플래그 먼저 설정 - 바이너리 데이터 손실 방지)
+  // is_reading_data는 volatile이므로 mutex 없이 먼저 설정
+  gsm->tcp.buffer.is_reading_data = true;
+  gsm->tcp.buffer.expected_data_len = target->qird.read_actual_length;
+  gsm->tcp.buffer.read_data_len = 0;
+  gsm->tcp.buffer.rx_len = 0;
+  gsm->tcp.buffer.current_connect_id = connect_id;
 }
 
 /**
