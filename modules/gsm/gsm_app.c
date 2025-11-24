@@ -231,6 +231,7 @@ static void gsm_evt_handler(gsm_evt_t evt, void *args) {
     LOG_INFO("애플리케이션: LTE 초기화 성공");
     // 여기서 추가 작업 수행 가능 (예: TCP 연결 등)
     ntrip_task_create(&gsm_handle);
+    gsm_socket_monitor_start();  // 소켓 상태 모니터링 시작
     break;
   }
 
