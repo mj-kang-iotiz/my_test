@@ -2,6 +2,7 @@
 #include "gps.h"
 #include "gps_port.h"
 #include "led.h"
+#include <string.h>
 
 static gps_instance_t* gps_instances[GPS_ID_MAX] = {NULL};
 static gps_instance_t gps_base_handle;
@@ -10,6 +11,101 @@ static gps_instance_t gps_rover_handle;
 char gps_recv[2048];
 gps_t gps_handle;
 QueueHandle_t gps_queue;
+
+#define GGA_AVG_SIZE 100
+
+struct {
+  double lat[GGA_AVG_SIZE];
+  double lon[GGA_AVG_SIZE];
+  double alt[GGA_AVG_SIZE];
+  double lat_avg;
+  double lon_avg;
+  double alt_avg;
+  uint8_t pos;
+  uint8_t len;
+  bool can_read;
+}gga_avg_data;
+
+void _add_gga_avg_data(double lat, double lon, double alt)
+{
+  uint8_t pos = gga_avg_data.pos;
+  double lat_temp = 0.0, lon_temp = 0.0, alt_temp = 0.0;
+
+  double prev_lat = gga_avg_data.lat[pos];
+  double prev_lon = gga_avg_data.lon[pos];
+  double prev_alt = gga_avg_data.alt[pos];
+
+  gga_avg_data.lat[pos] = lat;
+  gga_avg_data.lon[pos] = lon;
+  gga_avg_data.alt[pos] = alt;
+
+  gga_avg_data.pos = (gga_avg_data.pos + 1) % GGA_AVG_SIZE;
+
+  /* 정확도를 중시한 코드 */
+  if(gga_avg_data.len < GGA_AVG_SIZE)
+  {
+    gga_avg_data.len++;
+
+    if(gga_avg_data.len == GGA_AVG_SIZE)
+    {
+      
+      for(int i = 0; i < GGA_AVG_SIZE; i++)
+      {
+        lat_temp += gga_avg_data.lat[i];
+        lon_temp += gga_avg_data.lon[i];
+        alt_temp += gga_avg_data.alt[i];
+      }
+
+      gga_avg_data.lat_avg = lat_temp / (double)GGA_AVG_SIZE;
+      gga_avg_data.lon_avg = lon_temp / (double)GGA_AVG_SIZE;
+      gga_avg_data.alt_avg = alt_temp / (double)GGA_AVG_SIZE;
+
+      gga_avg_data.can_read = true;
+    }
+  }
+  else
+  {
+      for(int i = 0; i < GGA_AVG_SIZE; i++)
+      {
+        lat_temp += gga_avg_data.lat[i];
+        lon_temp += gga_avg_data.lon[i];
+        alt_temp += gga_avg_data.alt[i];
+      }
+
+      gga_avg_data.lat_avg = lat_temp / (double)GGA_AVG_SIZE;
+      gga_avg_data.lon_avg = lon_temp / (double)GGA_AVG_SIZE;
+      gga_avg_data.alt_avg = alt_temp / (double)GGA_AVG_SIZE;
+  }
+
+  /* 속도를 중시한 코드 */
+  // if(gga_avg_data.len < GGA_AVG_SIZE)
+  // {
+  //   gga_avg_data.len++;
+
+  //   if(gga_avg_data.len == GGA_AVG_SIZE)
+  //   {
+  //     double lat_temp = 0.0, lon_temp = 0.0, alt_temp = 0.0;
+  //     for(int i = 0; i < GGA_AVG_SIZE; i++)
+  //     {
+  //       lat_temp += gga_avg_data.lat[i];
+  //       lon_temp += gga_avg_data.lon[i];
+  //       alt_temp += gga_avg_data.alt[i];
+  //     }
+
+  //     gga_avg_data.lat_avg = lat_temp / (double)GGA_AVG_SIZE;
+  //     gga_avg_data.lon_avg = lon_temp / (double)GGA_AVG_SIZE;
+  //     gga_avg_data.alt_avg = alt_temp / (double)GGA_AVG_SIZE;
+
+  //     gga_avg_data.can_read = true;
+  //   }
+  // }
+  // else
+  // {
+  //   gga_avg_data.lat_avg += ((lat - prev_lat) / (double)GGA_AVG_SIZE);
+  //   gga_avg_data.lon_avg += ((lon - prev_lon) / (double)GGA_AVG_SIZE);
+  //   gga_avg_data.alt_avg += ((alt - prev_alt) / (double)GGA_AVG_SIZE);
+  // }
+}
 
 gps_t* gps_get_handle()
 {
@@ -25,6 +121,22 @@ static void gps_process_task(void *pvParameter);
  */
 void gps_task_create(void *arg) {
   xTaskCreate(gps_process_task, "gps", 2048, arg, tskIDLE_PRIORITY + 1, NULL);
+}
+
+void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, uint8_t msg)
+{
+  switch(protocol)
+  {
+    case GPS_PROTOCOL_NMEA:
+      if(msg == GPS_NMEA_MSG_GGA)
+      {
+        if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
+        {
+          _add_gga_avg_data(gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
+        }
+      }
+      break;
+  }
 }
 
 /**
@@ -43,6 +155,9 @@ static void gps_process_task(void *pvParameter) {
   size_t total_received = 0;
 
   gps_queue = xQueueCreate(10, 1);
+
+  gps_set_evt_handler(&gps_handle, gps_evt_handler);
+  memset(&gga_avg_data, 0, sizeof(gga_avg_data));
 
   gps_init(&gps_handle);
   gps_port_init();

@@ -9,6 +9,7 @@
         "gsm_port.h": "c",
         "gsm.h": "c",
         "gpio.h": "c",
-        "stm32f4xx_ll_rcc.h": "c"
+        "stm32f4xx_ll_rcc.h": "c",
+        "freertos.h": "c"
     }
 }

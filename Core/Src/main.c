@@ -96,7 +96,7 @@ void initThread(void *pvParameter) {
 	led_set_color(3, LED_COLOR_RED);
 	led_set_state(3, true);
   gps_task_create(NULL);
-  //gsm_task_create(NULL);
+  gsm_task_create(NULL);
 
   vTaskDelete(NULL);
 }

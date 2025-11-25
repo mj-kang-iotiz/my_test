@@ -39,6 +39,9 @@ typedef enum {
   GSM_CMD_QIRD,    ///< 소켓 읽기
   GSM_CMD_QISDE,   ///< 소켓 데이터 에코 설정
   GSM_CMD_QISTATE, ///< 소켓 상태 조회
+
+  // 설정
+  GSM_CMD_QICFG,
   GSM_CMD_MAX
 } gsm_cmd_t;
 
@@ -289,6 +292,7 @@ typedef struct {
   tcp_close_callback_t on_close; ///< 연결 종료 콜백
 
   SemaphoreHandle_t open_sem;
+  SemaphoreHandle_t close_sem;
 } gsm_tcp_socket_t;
 
 // TCP 버퍼 구조체
@@ -299,7 +303,7 @@ typedef struct {
   size_t tx_len;                          ///< TX 버퍼 사용 길이
 
   // QIRD 응답 파싱 중 상태
-  bool is_reading_data;       ///< TCP 데이터 읽기 중 플래그
+  volatile bool is_reading_data;       ///< TCP 데이터 읽기 중 플래그
   size_t expected_data_len;   ///< 예상 데이터 길이
   size_t read_data_len;       ///< 읽은 데이터 길이
   uint8_t current_connect_id; ///< 현재 읽기 중인 소켓 ID
@@ -375,6 +379,8 @@ int gsm_tcp_open(gsm_t *gsm, uint8_t connect_id, uint8_t context_id,
  * @return int 0: 성공, -1: 실패
  */
 int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback);
+
+int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id);
 
 /**
  * @brief TCP 데이터 전송
@@ -517,5 +523,20 @@ void gsm_send_at_qisde(gsm_t *gsm, gsm_at_mode_t at_mode, uint8_t echo_on,
 
 void gsm_send_at_qistate(gsm_t *gsm, uint8_t query_type, uint8_t connect_id,
                          at_cmd_handler callback);
+
+/**
+ * @brief AT+QICFG 전송 (TCP keep-alive 설정)
+ *
+ * @param gsm GSM 핸들
+ * @param connect_id 소켓 ID (0-11)
+ * @param enable 1: enable, 0: disable
+ * @param keepidle idle time before sending first keepalive probe (초, 기본 7200)
+ * @param keepinterval interval between keepalive probes (초, 기본 75)
+ * @param keepcount number of probes before closing connection (기본 9)
+ * @param callback 완료 콜백 (NULL이면 동기식)
+ */
+void gsm_send_at_qicfg_keepalive(gsm_t *gsm, uint8_t enable,
+                                  uint16_t keepidle, uint16_t keepinterval,
+                                  uint8_t keepcount, at_cmd_handler callback);
 
 #endif

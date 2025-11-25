@@ -203,3 +203,12 @@ int gps_uart_send(const char *data, size_t len) {
 
   return 0;
 }
+
+
+void gps_set_evt_handler(gps_t* gps, evt_handler handler)
+{
+  if(handler)
+  {
+    gps->handler = handler;
+  }
+}

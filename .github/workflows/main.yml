@@ -1,0 +1,380 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ '**' ]
+    # 무한 루프 방지: GitHub Actions가 만든 커밋은 무시
+    paths-ignore:
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ '**' ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # 자동 코드 포맷팅 (push 할 때마다 동작)
+  auto-format:
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip-format]') && !contains(github.event.head_commit.message, '🎨')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0  # 전체 히스토리 가져오기
+    
+    - name: Install clang-format
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-format-14
+    
+    - name: Run clang-format
+      run: |
+        # 모든 C/C++ 파일 포맷팅
+        find . -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) \
+          -not -path "./build/*" -not -path "./third_party/*" -not -path "./.git/*" | \
+        xargs clang-format-14 -i -style=file
+    
+    - name: Check for changes
+      id: verify-changed-files
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "## 📝 Files formatted:" >> $GITHUB_STEP_SUMMARY
+          git status --porcelain | sed 's/^ M /- /' >> $GITHUB_STEP_SUMMARY
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+          echo "✅ All files are already properly formatted!" >> $GITHUB_STEP_SUMMARY
+        fi
+    
+    - name: Commit and push changes
+      if: steps.verify-changed-files.outputs.changed == 'true'
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add .
+        git commit -m "🎨 Auto-format code with clang-format [skip ci]"
+        git push origin HEAD:${{ github.ref_name }}
+        
+        echo "### ✅ Code has been automatically formatted and pushed!" >> $GITHUB_STEP_SUMMARY
+
+  # cppcheck 정적 분석
+  static-analysis:
+    # auto-format이 있으면 그 다음에 실행, 없으면 바로 실행
+    needs: [auto-format]
+    if: always() && !cancelled() && !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        ref: ${{ github.ref }}
+        fetch-depth: 0  # 최신 변경사항 포함해서 가져오기
+    
+    - name: Pull latest changes (if any)
+      run: |
+        git pull origin ${{ github.ref_name }} || true
+    
+    - name: Install cppcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cppcheck
+    
+    - name: Run cppcheck
+      run: |
+        # cppcheck 실행 및 리포트 생성
+        cppcheck --enable=all \
+                 --error-exitcode=0 \
+                 --suppress=missingIncludeSystem \
+                 --suppress=unmatchedSuppression \
+                 --suppress=unusedFunction \
+                 --inline-suppr \
+                 --xml \
+                 --xml-version=2 \
+                 --output-file=cppcheck_report.xml \
+                 ./src ./include 2>&1 | tee cppcheck_output.txt
+        
+        # 결과를 GitHub Summary에 추가
+        echo "## 🔍 Cppcheck Analysis Results" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        if grep -E "\[(error|warning|style|performance|portability)\]" cppcheck_output.txt; then
+          grep -E "\[(error|warning|style|performance|portability)\]" cppcheck_output.txt >> $GITHUB_STEP_SUMMARY
+        else
+          echo "✅ No issues found!" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        
+        # 에러 카운트
+        ERROR_COUNT=$(grep -c "\[error\]" cppcheck_output.txt || true)
+        WARNING_COUNT=$(grep -c "\[warning\]" cppcheck_output.txt || true)
+        STYLE_COUNT=$(grep -c "\[style\]" cppcheck_output.txt || true)
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- Errors: $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "- Warnings: $WARNING_COUNT" >> $GITHUB_STEP_SUMMARY  
+        echo "- Style issues: $STYLE_COUNT" >> $GITHUB_STEP_SUMMARY
+        
+        # 심각한 에러가 있으면 빌드 실패
+        if [ $ERROR_COUNT -gt 0 ]; then
+          echo "❌ Critical errors found! Please fix them."
+          exit 1
+        fi
+    
+    - name: Upload cppcheck report
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: cppcheck-report
+        path: |
+          cppcheck_report.xml
+          cppcheck_output.txt
+
+  # 빌드 및 컴파일
+  build:
+    needs: [static-analysis]
+    if: always() && !cancelled() && !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        ref: ${{ github.ref }}
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Pull latest changes
+      run: |
+        git pull origin ${{ github.ref_name }} || true
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build
+        
+        # ARM 크로스 컴파일러 (필요시 주석 해제)
+        # sudo apt-get install -y gcc-arm-none-eabi
+    
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+              -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+              -DCMAKE_VERBOSE_MAKEFILE=ON \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+              -G Ninja
+    
+    - name: Build
+      run: |
+        cmake --build build --config ${{ env.BUILD_TYPE }}
+        echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Display binary info
+      run: |
+        echo "## 📊 Binary Information" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        
+        # 실행 파일이나 라이브러리 찾기
+        find build -type f \( -name "*.elf" -o -name "*.out" -o -name "*.exe" -o -name "*.a" -o -name "*.so" \) ! -path "*/CMakeFiles/*" | while read file; do
+          echo "📁 $(basename $file)" >> $GITHUB_STEP_SUMMARY
+          size "$file" 2>/dev/null | tail -n +2 >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+        done
+        
+        # .hex, .bin 파일 정보
+        find build -type f \( -name "*.hex" -o -name "*.bin" \) | while read file; do
+          echo "📁 $(basename $file): $(stat -c%s $file) bytes" >> $GITHUB_STEP_SUMMARY
+        done
+        
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-artifacts-${{ github.sha }}
+        path: |
+          build/**/*.hex
+          build/**/*.bin
+          build/**/*.elf
+          build/**/*.map
+          build/compile_commands.json
+
+  # 단위 테스트
+  test:
+    needs: [build]
+    if: always() && !cancelled() && !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        ref: ${{ github.ref }}
+        fetch-depth: 0
+    
+    - name: Pull latest changes
+      run: |
+        git pull origin ${{ github.ref_name }} || true
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake valgrind
+    
+    - name: Build tests
+      run: |
+        cmake -B build -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build
+    
+    - name: Run tests
+      continue-on-error: true
+      run: |
+        cd build
+        echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+        
+        # CTest 실행
+        if command -v ctest &> /dev/null && [ -f "CTestTestfile.cmake" ]; then
+          ctest --output-on-failure --verbose 2>&1 | tee test_results.txt
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          tail -20 test_results.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        # 또는 test 실행파일 직접 실행
+        elif [ -f "./test" ] || [ -f "./tests" ] || [ -f "./run_tests" ]; then
+          for test_exe in test tests run_tests; do
+            if [ -f "./$test_exe" ]; then
+              echo "Running $test_exe..." >> $GITHUB_STEP_SUMMARY
+              ./$test_exe 2>&1 | tee test_results.txt
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              cat test_results.txt >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              break
+            fi
+          done
+        else
+          echo "⚠️ No tests found. Consider adding unit tests!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Add `BUILD_TESTS` option to your CMakeLists.txt:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`cmake" >> $GITHUB_STEP_SUMMARY
+          echo "option(BUILD_TESTS \"Build unit tests\" OFF)" >> $GITHUB_STEP_SUMMARY
+          echo "if(BUILD_TESTS)" >> $GITHUB_STEP_SUMMARY
+          echo "    add_subdirectory(tests)" >> $GITHUB_STEP_SUMMARY
+          echo "endif()" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi
+    
+    - name: Memory check with Valgrind
+      if: success() || failure()
+      continue-on-error: true
+      run: |
+        cd build
+        echo "## 🔬 Memory Check (Valgrind)" >> $GITHUB_STEP_SUMMARY
+        
+        # 테스트 실행파일 찾기
+        TEST_EXE=""
+        for exe in test tests run_tests; do
+          if [ -f "./$exe" ]; then
+            TEST_EXE="./$exe"
+            break
+          fi
+        done
+        
+        if [ -n "$TEST_EXE" ]; then
+          valgrind --leak-check=full \
+                   --show-leak-kinds=all \
+                   --track-origins=yes \
+                   --verbose \
+                   $TEST_EXE 2>&1 | tee valgrind.log
+          
+          # 결과 요약
+          if grep -q "ERROR SUMMARY: 0 errors" valgrind.log; then
+            echo "✅ **No memory leaks detected!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Memory issues detected:**" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            grep -A 5 "LEAK SUMMARY" valgrind.log >> $GITHUB_STEP_SUMMARY || true
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "⚠️ No test executable found for memory check" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  # 성공 알림 (선택사항)
+  notify-success:
+    needs: [static-analysis, build, test]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Create success summary
+      run: |
+        echo "# 🎉 CI Pipeline Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Author:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "All checks passed! ✅" >> $GITHUB_STEP_SUMMARY
+
+  # 릴리즈 (태그 푸시 시)
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [static-analysis, build, test]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+    
+    - name: Build release binaries
+      run: |
+        # Release 빌드
+        cmake -B build-release -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-release
+        
+        # Debug 빌드 (디버깅용)
+        cmake -B build-debug -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build-debug
+        
+        # 바이너리 수집
+        mkdir -p release-files
+        
+        # 모든 바이너리 파일 복사
+        find build-release -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -exec cp {} release-files/ \;
+        find build-debug -type f \( -name "*.elf" \) | while read file; do
+          cp "$file" "release-files/$(basename $file .elf)-debug.elf"
+        done
+        
+        # 버전 정보 파일 생성
+        cat > release-files/version.txt << EOF
+        Release Version: ${{ github.ref_name }}
+        Build Date: $(date)
+        Git Commit: ${{ github.sha }}
+        Compiler: $(gcc --version | head -n1)
+        EOF
+        
+        # README 생성
+        cat > release-files/README.md << EOF
+        # Release ${{ github.ref_name }}
+        
+        ## Files
+        - *.hex : Intel HEX format for flashing
+        - *.bin : Binary format for direct writing
+        - *.elf : ELF format with symbols
+        - *-debug.elf : Debug version with full debug symbols
+        
+        ## Flashing
+        \`\`\`bash
+        # For STM32
+        st-flash write firmware.bin 0x8000000
+        
+        # For AVR
+        avrdude -p atmega328p -c arduino -P /dev/ttyUSB0 -b 115200 -U flash:w:firmware.hex
+        \`\`\`
+        EOF
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-files/*
+        generate_release_notes: true
+        draft: false
+        prerelease: false

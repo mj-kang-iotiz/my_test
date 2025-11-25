@@ -205,14 +205,24 @@ void handle_urc_qiclose(gsm_t *gsm, const char *data, size_t len) {
   if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
     uint8_t cid = target->qiclose.connect_id;
     if (cid < GSM_TCP_MAX_SOCKETS) {
-      // 연결 종료 콜백 호출
-      tcp_close_callback_t on_close = gsm->tcp.sockets[cid].on_close;
+      gsm_tcp_socket_t *socket = &gsm->tcp.sockets[cid];
 
-      gsm->tcp.sockets[cid].state = GSM_TCP_STATE_CLOSED;
-      gsm->tcp.sockets[cid].on_recv = NULL;
-      gsm->tcp.sockets[cid].on_close = NULL;
+      // 연결 종료 콜백 저장
+      tcp_close_callback_t on_close = socket->on_close;
+
+      // ★ close_sem Give (gsm_tcp_close 동기 대기 해제)
+      SemaphoreHandle_t close_sem = socket->close_sem;
+
+      socket->state = GSM_TCP_STATE_CLOSED;
+      socket->on_recv = NULL;
+      socket->on_close = NULL;
 
       xSemaphoreGive(gsm->tcp.tcp_mutex);
+
+      // ★ 뮤텍스 밖에서 세마포어 Give
+      if (close_sem) {
+        xSemaphoreGive(close_sem);
+      }
 
       // 뮤텍스 밖에서 콜백 호출
       if (on_close) {
@@ -284,16 +294,15 @@ void handle_urc_qird(gsm_t *gsm, const char *data, size_t len) {
   target->qird.read_actual_length = parse_uint32(&p);
   target->qird.connect_id = connect_id;
 
-  // TCP 버퍼 읽기 모드 활성화
-  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
-    gsm->tcp.buffer.is_reading_data = true;
-    gsm->tcp.buffer.expected_data_len = target->qird.read_actual_length;
-    gsm->tcp.buffer.read_data_len = 0;
-    gsm->tcp.buffer.rx_len = 0;
-    gsm->tcp.buffer.current_connect_id = connect_id;
+// ★ TCP 버퍼 읽기 모드 활성화 (플래그 먼저 설정 - 바이너리 데이터 손실 방지)
 
-    xSemaphoreGive(gsm->tcp.tcp_mutex);
-  }
+  // is_reading_data는 volatile이므로 mutex 없이 먼저 설정
+
+  gsm->tcp.buffer.is_reading_data = true;
+  gsm->tcp.buffer.expected_data_len = target->qird.read_actual_length;
+  gsm->tcp.buffer.read_data_len = 0;
+  gsm->tcp.buffer.rx_len = 0;
+  gsm->tcp.buffer.current_connect_id = connect_id;
 }
 
 /**
@@ -464,6 +473,8 @@ const gsm_at_cmd_entry_t gsm_at_cmd_handlers[] = {
     {GSM_CMD_QIRD, "AT+QIRD", "+QIRD: ", 5000},
     {GSM_CMD_QISDE, "AT+QISDE", "+QISDE: ", 300},
     {GSM_CMD_QISTATE, "AT+QISTATE", "+QISTATE: ", 300},
+
+    {GSM_CMD_QICFG, "AT+QICFG", "+QICFG: ", 300},
 
     {GSM_CMD_NONE, NULL, NULL, 0}};
 
@@ -665,9 +676,22 @@ void gsm_parse_response(gsm_t *gsm) {
   }
 }
 
+// struct 
+// {
+//   char data[128];
+//   uint8_t len;
+// }gsm_recv_t;
+
+// static inline void recv_add(char ch) {
+//   if (gps->nmea.term_pos < GPS_NMEA_TERM_SIZE - 1) {
+//     gps->nmea.term_str[gps->nmea.term_pos] = ch;
+//     gps->nmea.term_str[++gps->nmea.term_pos] = 0;
+//   }
+// }
+
 void gsm_parse_process(gsm_t *gsm, const void *data, size_t len) {
   const uint8_t *d = data;
-  char ch_prev1 = 0;
+  static char ch_prev1 = 0;
 
   for (; len > 0; ++d, --len) {
     // ★ TCP 바이너리 데이터 읽기 모드
@@ -935,7 +959,7 @@ void gsm_init(gsm_t *gsm, evt_handler_t handler, void *args) {
   gsm->urc_info_tbl = urc_info_handlers;
 
   gsm->ops = &stm32_hal_ops;
-  gsm->at_cmd_queue = xQueueCreate(5, sizeof(gsm_at_cmd_t));
+  gsm->at_cmd_queue = xQueueCreate(15, sizeof(gsm_at_cmd_t));
 
   // TCP 초기화
   gsm_tcp_init(gsm);
@@ -1185,7 +1209,7 @@ void gsm_tcp_init(gsm_t *gsm) {
   memset(&gsm->tcp.buffer, 0, sizeof(gsm_tcp_buffer_t));
 
   // TCP 이벤트 큐 생성
-  gsm->tcp.event_queue = xQueueCreate(10, sizeof(tcp_event_t));
+  gsm->tcp.event_queue = xQueueCreate(15, sizeof(tcp_event_t));
 
   // TCP 태스크 생성
   xTaskCreate(gsm_tcp_task, "gsm_tcp", 2048, gsm, tskIDLE_PRIORITY + 3,
@@ -1308,15 +1332,21 @@ int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback) {
   }
 
   gsm_tcp_socket_t *socket = &gsm->tcp.sockets[connect_id];
-
   // 소켓 상태 확인
   if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
-    if (socket->state != GSM_TCP_STATE_CONNECTED) {
+      if (socket->state == GSM_TCP_STATE_CLOSED) {
       xSemaphoreGive(gsm->tcp.tcp_mutex);
-      return -1;
+      return 0;
     }
 
     socket->state = GSM_TCP_STATE_CLOSING;
+
+    // ★ close_sem 생성 (+QICLOSE URC 대기용)
+    if (socket->close_sem) {
+      vSemaphoreDelete(socket->close_sem);
+    }
+
+    socket->close_sem = xSemaphoreCreateBinary();
     xSemaphoreGive(gsm->tcp.tcp_mutex);
   }
 
@@ -1349,6 +1379,7 @@ int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback) {
     uint32_t timeout_ms = gsm->at_tbl[GSM_CMD_QICLOSE].timeout_ms;
     if (timeout_ms == 0)
       timeout_ms = 10000;
+
     timeout_ms += 1000; // Producer보다 1초 더 대기
 
     TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
@@ -1357,11 +1388,205 @@ int gsm_tcp_close(gsm_t *gsm, uint8_t connect_id, at_cmd_handler callback) {
     vSemaphoreDelete(sem);
 
     if (result != pdTRUE || !gsm->status.is_ok) {
+      // OK 실패 시 close_sem 정리
+      if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+        if (socket->close_sem) {
+          vSemaphoreDelete(socket->close_sem);
+          socket->close_sem = NULL;
+        }
+
+        xSemaphoreGive(gsm->tcp.tcp_mutex);
+      }
       return -1;
     }
 
+    // ★★★ OK 받은 후 +QICLOSE URC 대기 ★★★
+    // EC25: AT+QICLOSE → OK → +QICLOSE: <id> (실제 닫힘)
+    result = xSemaphoreTake(socket->close_sem, pdMS_TO_TICKS(5000));
+
+    // close_sem 정리
+    if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+      if (socket->close_sem) {
+        vSemaphoreDelete(socket->close_sem);
+        socket->close_sem = NULL;
+      }
+      xSemaphoreGive(gsm->tcp.tcp_mutex);
+    }
+
+    if (result != pdTRUE) {
+      // +QICLOSE URC 타임아웃 - 강제로 상태 변경
+      LOG_WARN("gsm_tcp_close: +QICLOSE URC 타임아웃, 강제 닫힘 처리");
+      if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+        socket->state = GSM_TCP_STATE_CLOSED;
+        xSemaphoreGive(gsm->tcp.tcp_mutex);
+      }
     return 0;
   }
+}
+}
+
+int gsm_tcp_close_force(gsm_t *gsm, uint8_t connect_id) {
+
+  if (!gsm || connect_id >= GSM_TCP_MAX_SOCKETS) {
+
+    return -1;
+
+  }
+
+ 
+
+  gsm_tcp_socket_t *socket = &gsm->tcp.sockets[connect_id];
+
+ 
+
+  LOG_INFO("gsm_tcp_close_force: connect_id=%d 강제 닫기 시작", connect_id);
+
+ 
+
+  // ★ 상태 무관 강제 닫기 - close_sem 생성
+
+  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+
+    socket->state = GSM_TCP_STATE_CLOSING;
+
+ 
+
+    if (socket->close_sem) {
+
+      vSemaphoreDelete(socket->close_sem);
+
+    }
+
+    socket->close_sem = xSemaphoreCreateBinary();
+
+ 
+
+    xSemaphoreGive(gsm->tcp.tcp_mutex);
+
+  }
+
+ 
+
+  // AT+QICLOSE=<connectID>,0 (타임아웃 0 = 즉시)
+
+  gsm_at_cmd_t msg = {
+
+      .at_mode = GSM_AT_WRITE,
+
+      .cmd = GSM_CMD_QICLOSE,
+
+      .wait_type = GSM_WAIT_NONE,
+
+      .callback = NULL,
+
+      .sem = NULL,
+
+      .tx_pbuf = NULL,
+
+  };
+
+ 
+
+  snprintf(msg.params, GSM_AT_CMD_PARAM_SIZE, "%d,0", connect_id);
+
+ 
+
+  gsm->status.is_ok = 0;
+
+  gsm->status.is_err = 0;
+
+  gsm->status.is_timeout = 0;
+
+ 
+
+  msg.sem = xSemaphoreCreateBinary();
+
+  SemaphoreHandle_t sem = msg.sem;
+
+ 
+
+  xQueueSend(gsm->at_cmd_queue, &msg, portMAX_DELAY);
+
+ 
+
+  // OK 대기
+
+  TickType_t timeout_ticks = pdMS_TO_TICKS(11000);
+
+  BaseType_t result = xSemaphoreTake(sem, timeout_ticks);
+
+  vSemaphoreDelete(sem);
+
+ 
+
+  if (result != pdTRUE) {
+
+    LOG_ERR("gsm_tcp_close_force: OK 타임아웃");
+
+    // close_sem 정리
+
+    if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+
+      if (socket->close_sem) {
+
+        vSemaphoreDelete(socket->close_sem);
+
+        socket->close_sem = NULL;
+
+      }
+
+      socket->state = GSM_TCP_STATE_CLOSED;
+
+      xSemaphoreGive(gsm->tcp.tcp_mutex);
+
+    }
+
+    return -1;
+
+  }
+
+ 
+
+  // ★★★ OK 받은 후 +QICLOSE URC 대기 ★★★
+
+  LOG_INFO("gsm_tcp_close_force: OK 수신, +QICLOSE URC 대기 중...");
+
+  result = xSemaphoreTake(socket->close_sem, pdMS_TO_TICKS(5000));
+
+ 
+
+  // close_sem 정리
+
+  if (xSemaphoreTake(gsm->tcp.tcp_mutex, portMAX_DELAY) == pdTRUE) {
+
+    if (socket->close_sem) {
+
+      vSemaphoreDelete(socket->close_sem);
+
+      socket->close_sem = NULL;
+
+    }
+
+ 
+
+    if (result != pdTRUE) {
+
+      LOG_WARN("gsm_tcp_close_force: +QICLOSE URC 타임아웃, 강제 닫힘 처리");
+
+      socket->state = GSM_TCP_STATE_CLOSED;
+
+    }
+
+    xSemaphoreGive(gsm->tcp.tcp_mutex);
+
+  }
+
+ 
+
+  LOG_INFO("gsm_tcp_close_force: 완료");
+
+  return 0;
+
 }
 
 int gsm_tcp_send(gsm_t *gsm, uint8_t connect_id, const uint8_t *data,
@@ -1434,7 +1659,8 @@ int gsm_tcp_send(gsm_t *gsm, uint8_t connect_id, const uint8_t *data,
 }
 
 int gsm_tcp_read(gsm_t *gsm, uint8_t connect_id, size_t max_len,
-                 at_cmd_handler callback) {
+                 at_cmd_handler callback)
+{
   if (!gsm || connect_id >= GSM_TCP_MAX_SOCKETS || max_len == 0 ||
       max_len > 1500) {
     return -1;
@@ -1504,7 +1730,8 @@ void gsm_send_at_ate(gsm_t *gsm, uint8_t echo_on, at_cmd_handler callback) {
  * @brief AT+QISDE 전송 (소켓 데이터 에코 설정)
  */
 void gsm_send_at_qisde(gsm_t *gsm, gsm_at_mode_t at_mode, uint8_t echo_on,
-                       at_cmd_handler callback) {
+                       at_cmd_handler callback)
+{
   char params[4] = {0};
 
   if (at_mode == GSM_AT_WRITE) {
@@ -1519,10 +1746,22 @@ void gsm_send_at_qisde(gsm_t *gsm, gsm_at_mode_t at_mode, uint8_t echo_on,
  * @brief AT+QISTATE 전송 (소켓 상태 조회)
  */
 void gsm_send_at_qistate(gsm_t *gsm, uint8_t query_type, uint8_t connect_id,
-                         at_cmd_handler callback) {
+                         at_cmd_handler callback)
+{
   char params[8] = {0};
 
   // AT+QISTATE=<query_type>,<contextID 또는 connectID>
   snprintf(params, sizeof(params), "%d,%d", query_type, connect_id);
   gsm_send_at_cmd(gsm, GSM_CMD_QISTATE, GSM_AT_WRITE, params, callback);
+}
+
+
+void gsm_send_at_qicfg_keepalive(gsm_t *gsm, uint8_t enable,
+                                  uint16_t keepidle, uint16_t keepinterval,
+                                  uint8_t keepcount, at_cmd_handler callback) {
+  char params[64] = {0};
+  // AT+QICFG="tcp/keepalive",<enable>,<idle_time>,<interval_time>,<probe_cnt>
+  snprintf(params, sizeof(params), "\"tcp/keepalive\",%d,%d,%d,%d",
+           enable, keepidle, keepinterval, keepcount);
+  gsm_send_at_cmd(gsm, GSM_CMD_QICFG, GSM_AT_WRITE, params, callback);
 }

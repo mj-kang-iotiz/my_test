@@ -195,6 +195,38 @@ int tcp_close(tcp_socket_t *sock) {
   return ret;
 }
 
+
+int tcp_close_force(tcp_socket_t *sock) {
+
+  if (!sock) {
+
+    return -1;
+
+  }
+
+ 
+
+  // ★ 상태 무관 강제 닫기 (에러 566 복구용)
+
+  int ret = gsm_tcp_close_force(sock->gsm, sock->connect_id);
+
+ 
+
+  if (xSemaphoreTake(sock->mutex, portMAX_DELAY) == pdTRUE) {
+
+    sock->is_connected = false;
+
+    sock->is_closed_by_peer = false;
+
+    xSemaphoreGive(sock->mutex);
+
+  }
+
+ 
+
+  return ret;
+
+}
 void tcp_socket_destroy(tcp_socket_t *sock) {
   if (!sock) {
     return;

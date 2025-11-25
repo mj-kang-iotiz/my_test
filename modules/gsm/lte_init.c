@@ -28,6 +28,8 @@ static void lte_apn_verify_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                     bool is_ok);
 static void lte_network_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                        bool is_ok);
+static void lte_keepalive_set_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
+                                       bool is_ok);
 
 /**
  * @brief GSM 핸들 설정
@@ -128,7 +130,7 @@ void lte_init_start(void) {
   lte_init_state = LTE_INIT_AT_TEST;
 
   // AT 테스트 (통신 확인)
-  LOG_INFO("[1/8] AT 통신 테스트...");
+  LOG_INFO("[1/9] AT 통신 테스트...");
   gsm_send_at_cmd(gsm_handle_ptr, GSM_CMD_AT, GSM_AT_EXECUTE, NULL,
                   lte_at_test_callback);
 }
@@ -139,18 +141,17 @@ void lte_init_start(void) {
 static void lte_at_test_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                  bool is_ok) {
   if (!is_ok) {
-    lte_init_fail_with_retry("[1/8] AT 통신 실패");
-
+    lte_init_fail_with_retry("[1/9] AT 통신 실패");
     return;
   }
 
-  LOG_INFO("[1/8] AT 통신 OK");
+  LOG_INFO("[1/9] AT 통신 OK");
 
   lte_init_state = LTE_INIT_ECHO_OFF;
 
   // ATE0 설정 (에코 비활성화)
 
-  LOG_INFO("[2/8] ATE0 에코 비활성화...");
+  LOG_INFO("[2/9] ATE0 에코 비활성화...");
 
   gsm_send_at_ate(gsm, 0, lte_echo_off_callback);
 }
@@ -167,15 +168,15 @@ static void lte_echo_off_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
 {
 
   if (!is_ok) {
-    lte_init_fail_with_retry("[2/8] ATE0 설정 실패");
+    lte_init_fail_with_retry("[2/9] ATE0 설정 실패");
     return;
   }
 
-  LOG_INFO("[2/8] ATE0 OK");
+  LOG_INFO("[2/9] ATE0 OK");
   lte_init_state = LTE_INIT_CMEE_SET;
 
   // AT+CMEE=2 설정 (상세 에러 메시지)
-  LOG_INFO("[3/8] AT+CMEE=2 설정...");
+  LOG_INFO("[3/9] AT+CMEE=2 설정...");
   gsm_send_at_cmee(gsm, GSM_AT_WRITE, GSM_CMEE_ENABLE_VERBOSE,
                    lte_cmee_set_callback);
 }
@@ -186,45 +187,39 @@ static void lte_echo_off_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
 static void lte_cmee_set_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                   bool is_ok) {
   if (!is_ok) {
-    lte_init_fail_with_retry("[3/8] AT+CMEE=2 설정 실패");
+    lte_init_fail_with_retry("[3/9] AT+CMEE=2 설정 실패");
 
     return;
   }
 
-  LOG_INFO("[3/8] AT+CMEE=2 OK");
+  LOG_INFO("[3/9] AT+CMEE=2 OK");
 
   lte_init_state = LTE_INIT_QISDE_OFF;
 
   // AT+QISDE=0 설정 (소켓 데이터 에코 비활성화)
 
-  LOG_INFO("[4/8] AT+QISDE=0 소켓 데이터 에코 비활성화...");
+  LOG_INFO("[4/9] AT+QISDE=0 소켓 데이터 에코 비활성화...");
 
   gsm_send_at_qisde(gsm, GSM_AT_WRITE, 0, lte_qisde_off_callback);
 }
 
 /**
-
  * @brief AT+QISDE=0 소켓 데이터 에코 비활성화 완료 콜백
-
  */
-
 static void lte_qisde_off_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                    bool is_ok)
-
 {
-
   if (!is_ok) {
-    lte_init_fail_with_retry("[4/8] AT+QISDE=0 설정 실패");
+    lte_init_fail_with_retry("[4/9] AT+QISDE=0 설정 실패");
     return;
   }
 
-  LOG_INFO("[4/8] AT+QISDE=0 OK");
+  LOG_INFO("[4/9] AT+QISDE=0 OK");
   lte_init_state = LTE_INIT_CPIN_CHECK;
 
   // AT+CPIN? (SIM 확인)
-  LOG_INFO("[5/8] AT+CPIN? SIM 확인...");
-  gsm_send_at_cmd(gsm, GSM_CMD_CPIN, GSM_AT_READ, NULL,
-                  lte_cpin_check_callback);
+  LOG_INFO("[5/9] AT+QICFG TCP keep-alive 설정...");
+  gsm_send_at_qicfg_keepalive(gsm, 1, 2, 30, 3, lte_keepalive_set_callback);
 }
 
 /**
@@ -233,27 +228,27 @@ static void lte_qisde_off_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
 static void lte_cpin_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                     bool is_ok) {
   if (!is_ok) {
-    lte_init_fail_with_retry("[5/8] AT+CPIN? 실패");
+    lte_init_fail_with_retry("[6/9] AT+CPIN? 실패");
     return;
   }
 
   // SIM 상태 확인
   gsm_msg_t *m = (gsm_msg_t *)msg;
   if (m && strlen(m->cpin.code) > 0) {
-    LOG_INFO("[5/8] SIM 상태: %s", m->cpin.code);
+    LOG_INFO("[6/9] SIM 상태: %s", m->cpin.code);
 
     if (strcmp(m->cpin.code, "READY") != 0) {
-      LOG_WARN("[5/8] SIM이 READY 상태가 아닙니다: %s", m->cpin.code);
+      LOG_WARN("[6/9] SIM이 READY 상태가 아닙니다: %s", m->cpin.code);
       // READY가 아니어도 계속 진행 (SIM PIN 입력 등은 별도 처리)
     }
   } else {
-    LOG_INFO("[5/8] SIM 상태 확인 완료");
+    LOG_INFO("[6/9] SIM 상태 확인 완료");
   }
 
   lte_init_state = LTE_INIT_APN_SET;
 
   // AT+CGDCONT APN 설정
-  LOG_INFO("[6/8] AT+CGDCONT APN 설정...");
+  LOG_INFO("[7/9] AT+CGDCONT APN 설정...");
 
   gsm_pdp_context_t ctx = {
       .cid = 1, .type = GSM_PDP_TYPE_IP, .apn = "internet.lguplus.co.kr"};
@@ -266,14 +261,14 @@ static void lte_cpin_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
 static void lte_apn_set_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                  bool is_ok) {
   if (!is_ok) {
-    lte_init_fail_with_retry("[6/8] APN 설정 실패");
+    lte_init_fail_with_retry("[7/9] APN 설정 실패");
     return;
   }
 
-  LOG_INFO("[6/8] APN 설정 OK");
+  LOG_INFO("[7/9] APN 설정 OK");
   lte_init_state = LTE_INIT_APN_VERIFY;
 
-  LOG_INFO("[7/8] AT+CGDCONT? APN 확인...");
+  LOG_INFO("[8/9] AT+CGDCONT? APN 확인...");
   gsm_send_at_cgdcont(gsm, GSM_AT_READ, NULL, lte_apn_verify_callback);
 }
 
@@ -283,14 +278,14 @@ static void lte_apn_set_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
 static void lte_apn_verify_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
                                     bool is_ok) {
   if (!is_ok) {
-    lte_init_fail_with_retry("[7/8] APN 확인 실패");
+    lte_init_fail_with_retry("[8/9] APN 확인 실패");
     return;
   }
 
   // APN 설정 확인
   gsm_msg_t *m = (gsm_msg_t *)msg;
   if (m && m->cgdcont.count > 0) {
-    LOG_INFO("[7/8] APN 설정 확인:");
+    LOG_INFO("[8/9] APN 설정 확인:");
     for (size_t i = 0; i < m->cgdcont.count; i++) {
       gsm_pdp_context_t *ctx = &m->cgdcont.contexts[i];
       LOG_INFO("  CID %d: type=%d, apn=%s", ctx->cid, ctx->type, ctx->apn);
@@ -299,22 +294,22 @@ static void lte_apn_verify_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
     // 설정한 APN이 맞는지 확인
     gsm_pdp_context_t *ctx = &m->cgdcont.contexts[0];
     if (ctx->cid == 1 && strcmp(ctx->apn, "internet.lguplus.co.kr") == 0) {
-      LOG_INFO("[7/8] APN 정상 등록: %s", ctx->apn);
+      LOG_INFO("[8/9] APN 정상 등록: %s", ctx->apn);
       lte_init_state = LTE_INIT_NETWORK_CHECK;
 
       // 네트워크 등록 확인 시작
-      LOG_INFO("[8/8] AT+COPS? 네트워크 등록 확인...");
+      LOG_INFO("[9/9] AT+COPS? 네트워크 등록 확인...");
       lte_network_check_count = 0;
       gsm_send_at_cmd(gsm, GSM_CMD_COPS, GSM_AT_READ, NULL,
                       lte_network_check_callback);
       return;
     } else {
-      LOG_WARN("[7/8] APN 불일치: cid=%d, apn=%s", ctx->cid, ctx->apn);
+      LOG_WARN("[8/9] APN 불일치: cid=%d, apn=%s", ctx->cid, ctx->apn);
     }
   }
 
   // APN 확인 실패
-  lte_init_fail_with_retry("[7/8] APN 확인 실패");
+  lte_init_fail_with_retry("[8/9] APN 확인 실패");
 }
 
 /**
@@ -325,12 +320,12 @@ static void lte_network_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
   lte_network_check_count++;
 
   if (!is_ok) {
-    LOG_WARN("[8/8] AT+COPS? 실패 (%d/%d)", lte_network_check_count,
+    LOG_WARN("[9/9] AT+COPS? 실패 (%d/%d)", lte_network_check_count,
              LTE_NETWORK_CHECK_MAX_RETRY);
 
     // 최대 재시도 횟수 초과
     if (lte_network_check_count >= LTE_NETWORK_CHECK_MAX_RETRY) {
-      lte_init_fail_with_retry("[8/8] 네트워크 등록 확인 타임아웃 (2분 초과)");
+      lte_init_fail_with_retry("[9/9] 네트워크 등록 확인 타임아웃 (2분 초과)");
       return;
     }
 
@@ -345,7 +340,7 @@ static void lte_network_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
   // 네트워크 상태 확인
   gsm_msg_t *m = (gsm_msg_t *)msg;
   if (m && strlen(m->cops.oper) > 0) {
-    LOG_INFO("[8/8] 네트워크 등록: %s (mode=%d, act=%d)", m->cops.oper,
+    LOG_INFO("[9/9] 네트워크 등록: %s (mode=%d, act=%d)", m->cops.oper,
              m->cops.mode, m->cops.act);
 
     // 네트워크 등록 완료
@@ -372,12 +367,12 @@ static void lte_network_check_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
   }
 
   // 네트워크 미등록 (재시도)
-  LOG_INFO("[8/8] 네트워크 미등록 (%d/%d) - 6초 후 재시도...",
+  LOG_INFO("[9/9] 네트워크 미등록 (%d/%d) - 6초 후 재시도...",
            lte_network_check_count, LTE_NETWORK_CHECK_MAX_RETRY);
 
   // 최대 재시도 횟수 확인
   if (lte_network_check_count >= LTE_NETWORK_CHECK_MAX_RETRY) {
-    lte_init_fail_with_retry("[8/8] 네트워크 등록 실패 (2분 초과)");
+    lte_init_fail_with_retry("[9/9] 네트워크 등록 실패 (2분 초과)");
     return;
   }
 
@@ -396,7 +391,23 @@ void lte_network_check_timer_callback(TimerHandle_t xTimer) {
     return;
   }
 
-  LOG_INFO("[8/8] 네트워크 등록 재확인...");
+  LOG_INFO("[9/9] 네트워크 등록 재확인...");
   gsm_send_at_cmd(gsm_handle_ptr, GSM_CMD_COPS, GSM_AT_READ, NULL,
                   lte_network_check_callback);
+}
+
+static void lte_keepalive_set_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
+                                       bool is_ok) {
+  if (!is_ok) {
+    lte_init_fail_with_retry("[5/9] AT+QICFG keep-alive 설정 실패");
+    return;
+  }
+
+  LOG_INFO("[5/9] TCP keep-alive OK");
+  lte_init_state = LTE_INIT_CPIN_CHECK;
+
+  // AT+CPIN? (SIM 확인)
+  LOG_INFO("[6/9] AT+CPIN? SIM 확인...");
+  gsm_send_at_cmd(gsm, GSM_CMD_CPIN, GSM_AT_READ, NULL,
+                  lte_cpin_check_callback);
 }

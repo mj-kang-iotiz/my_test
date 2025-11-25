@@ -199,20 +199,32 @@ int gsm_port_reset(void) {
  * @brief This function handles USART1 global interrupt.
  */
 void USART1_IRQHandler(void) {
-  LL_USART_ClearFlag_IDLE(GSM_PORT_UART);
-  LL_USART_ClearFlag_PE(GSM_PORT_UART);
-  LL_USART_ClearFlag_FE(GSM_PORT_UART);
-  LL_USART_ClearFlag_ORE(GSM_PORT_UART);
-  LL_USART_ClearFlag_NE(GSM_PORT_UART);
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  if (gsm_queue != NULL) {
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    uint8_t dummy = 0;
-    xQueueSendFromISR(gsm_queue, &dummy, &xHigherPriorityTaskWoken);
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  if(LL_USART_IsActiveFlag_IDLE(GSM_PORT_UART))
+  {
+    if (gsm_queue != NULL) {
+      uint8_t dummy = 0;
+      xQueueSendFromISR(gsm_queue, &dummy, &xHigherPriorityTaskWoken);
+    }
+    LL_USART_ClearFlag_IDLE(GSM_PORT_UART);
   }
   /* USER CODE BEGIN USART1_IRQn 0 */
 
+  if (LL_USART_IsActiveFlag_PE(GSM_PORT_UART)) {
+    LL_USART_ClearFlag_PE(GSM_PORT_UART);
+  }
+  if (LL_USART_IsActiveFlag_FE(GSM_PORT_UART)) {
+    LL_USART_ClearFlag_FE(GSM_PORT_UART);
+  }
+  if (LL_USART_IsActiveFlag_ORE(GSM_PORT_UART)) {
+    LL_USART_ClearFlag_ORE(GSM_PORT_UART);
+  }
+  if (LL_USART_IsActiveFlag_NE(GSM_PORT_UART)) {
+    LL_USART_ClearFlag_NE(GSM_PORT_UART);
+  }
+
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
   /* USER CODE END USART1_IRQn 0 */
   /* USER CODE BEGIN USART1_IRQn 1 */
 

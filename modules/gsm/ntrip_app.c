@@ -19,10 +19,12 @@
 #define NTRIP_CONNECT_ID 0 // 소켓 ID (0-11)
 #define NTRIP_CONTEXT_ID 1 // PDP context ID
 
+#define NTRIP_MAX_CONNECT_RETRY 3
+
 // NTRIP HTTP 요청
 static const char NTRIP_HTTP_REQUEST[] =
     "GET /SONP-RTCM32 HTTP/1.0\r\n"
-    "User-Agent: GUGU SYSTEM RTK\r\n"
+    "User-Agent: NTRIP GUGU SYSTEM\r\n"
     "Accept: */*\r\n"
     "Connection: close\r\n"
     "Authorization: Basic bWoua2FuZ0Bpb3Rpei5rcjpnbnNz\r\n"
@@ -38,6 +40,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
   gps_t* gps_handle = gps_get_handle();
 
   int ret;
+  int retry_count = 0;
 
   LOG_INFO("NTRIP 태스크 시작");
 
@@ -48,32 +51,39 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     vTaskDelete(NULL);
     return;
   }
-
   LOG_INFO("TCP 소켓 생성 완료");
+    while (retry_count < NTRIP_MAX_CONNECT_RETRY) {
 
-  LOG_INFO("NTRIP 서버 연결 시도: %s:%d", NTRIP_SERVER_IP, NTRIP_SERVER_PORT);
-  ret = tcp_connect(sock, NTRIP_CONTEXT_ID, NTRIP_SERVER_IP, NTRIP_SERVER_PORT,
-                    10000);
-  if (ret != 0) {
-    LOG_ERR("TCP 연결 실패: %d", ret);
+    LOG_INFO("NTRIP 서버 연결 시도 [%d/%d]: %s:%d",
+             retry_count + 1, NTRIP_MAX_CONNECT_RETRY,
+             NTRIP_SERVER_IP, NTRIP_SERVER_PORT);
+
+
+    ret = tcp_connect(sock, NTRIP_CONTEXT_ID, NTRIP_SERVER_IP, NTRIP_SERVER_PORT,
+                      10000);
+
+    if (ret == 0 && tcp_get_socket_state(sock, NTRIP_CONNECT_ID) == GSM_TCP_STATE_CONNECTED) {
+      LOG_INFO("TCP 연결 성공");
+      break;  // 연결 성공
+    }
+
+    // ★ 연결 실패 - 강제 닫기 후 재시도
+    LOG_WARN("TCP 연결 실패 (ret=%d), 강제 닫기 후 재시도...", ret);
+    tcp_close_force(sock);
+
+    // 재시도 전 대기 (1초)
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    retry_count++;
+  }
+
+  if (retry_count >= NTRIP_MAX_CONNECT_RETRY) {
+    LOG_ERR("TCP 연결 최대 재시도 횟수 초과");
     tcp_socket_destroy(sock);
     vTaskDelete(NULL);
     return;
-  } else if (tcp_get_socket_state(sock, 0) != GSM_TCP_STATE_CONNECTED) {
-    tcp_close(sock);
-    LOG_INFO("NTRIP 서버 연결 재시도: %s:%d", NTRIP_SERVER_IP,
-             NTRIP_SERVER_PORT);
-    ret = tcp_connect(sock, NTRIP_CONTEXT_ID, NTRIP_SERVER_IP,
-                      NTRIP_SERVER_PORT, 10000);
-    if (ret != 0) {
-      LOG_ERR("TCP 연결 실패: %d", ret);
-      tcp_socket_destroy(sock);
-      vTaskDelete(NULL);
-      return;
-    }
   }
 
-  LOG_INFO("TCP 연결 성공");
+  gsm_socket_monitor_start();
 
   // HTTP 요청 전송 (한 번만)
   LOG_INFO("NTRIP HTTP 요청 전송");
@@ -122,10 +132,9 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
           }
         }
 
-        gps_handle->ops->send((const char*)recv_buf, ret);
-
         LOG_INFO("  %04X: %-48s | %s", i, hex_str, ascii_str);
       }
+      gps_handle->ops->send((const char*)recv_buf, ret);
     } else if (ret == 0) {
       // 타임아웃
       LOG_INFO("수신 타임아웃 (10초 동안 데이터 없음)");

@@ -80,6 +80,8 @@ int tcp_recv(tcp_socket_t *sock, uint8_t *buf, size_t len, uint32_t timeout_ms);
  * @return int 0: 성공, -1: 실패
  */
 int tcp_close(tcp_socket_t *sock);
+int tcp_close_force(tcp_socket_t *sock);
+
 
 /**
  * @brief TCP 소켓 해제

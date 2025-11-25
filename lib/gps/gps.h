@@ -22,6 +22,8 @@ typedef struct {
   int (*recv)(char *buf, size_t len);
 } gps_hal_ops_t;
 
+typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, uint8_t msg);
+
 /**
  * @brief GPS 구조체
  *
@@ -48,10 +50,14 @@ typedef struct gps_s {
   /* info */
   gps_nmea_data_t nmea_data;
   gps_ubx_data_t ubx_data;
+
+  /* evt handler */
+  evt_handler handler;
 } gps_t;
 
 void gps_init(gps_t *gps);
 void gps_parse_process(gps_t *gps, const void *data, size_t len);
+void gps_set_evt_handler(gps_t *gps, evt_handler handler);
 
 bool get_gga(gps_t *gps, char* buf, uint8_t* len);
 

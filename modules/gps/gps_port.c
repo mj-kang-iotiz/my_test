@@ -169,14 +169,28 @@ uint32_t gps_get_rx_pos(void) {
  * @brief This function handles USART2 global interrupt.
  */
 void USART2_IRQHandler(void) {
-  if (LL_USART_IsActiveFlag_IDLE(USART2)) {
-    LL_USART_ClearFlag_IDLE(USART2);
+   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  if (LL_USART_IsActiveFlag_IDLE(USART2)) {
     uint8_t dummy = 0;
     xQueueSendFromISR(gps_queue, &dummy, &xHigherPriorityTaskWoken);
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    LL_USART_ClearFlag_IDLE(USART2);
   }
+
+  if (LL_USART_IsActiveFlag_PE(USART2)) {
+    LL_USART_ClearFlag_PE(USART2);
+  }
+  if (LL_USART_IsActiveFlag_FE(USART2)) {
+    LL_USART_ClearFlag_FE(USART2);
+  }
+  if (LL_USART_IsActiveFlag_ORE(USART2)) {
+    LL_USART_ClearFlag_ORE(USART2);
+  }
+  if (LL_USART_IsActiveFlag_NE(USART2)) {
+    LL_USART_ClearFlag_NE(USART2);
+  }
+
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 /**
