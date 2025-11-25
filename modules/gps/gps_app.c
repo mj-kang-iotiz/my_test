@@ -199,6 +199,16 @@ static void gps_process_task(void *pvParameter)
 }
 
 /**
+ * @brief GPS 태스크 생성 (레거시 호환용)
+ *
+ * main.c에서 gps_task_create(NULL) 호출 시 사용
+ */
+void gps_task_create(void *arg) {
+  (void)arg;  // 사용하지 않음
+  gps_init_all();
+}
+
+/**
  * @brief GPS 전체 초기화 (보드 설정 기반)
  */
 void gps_init_all(void)

@@ -15,6 +15,13 @@
 void gps_init_all(void);
 
 /**
+ * @brief GPS 태스크 생성 (레거시 호환용)
+ *
+ * @param arg 사용하지 않음 (board_config로 자동 설정)
+ */
+void gps_task_create(void *arg);
+
+/**
  * @brief GPS 핸들 가져오기 (레거시 호환성)
  *
  * @return GPS 핸들 포인터 (첫 번째 GPS)
