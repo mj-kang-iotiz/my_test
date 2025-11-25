@@ -41,127 +41,186 @@ STM32CubeIDE에서 **Project → Build Project**
 ```
 config/
 ├── board_type.h        # 보드 선택 (여기서 수정!)
-├── board_config.h      # 보드 설정 API
-├── board_config.c      # 보드별 초기화 구현
-├── board_pinmap.h      # 보드별 핀맵 정의
-└── FreeRTOSConfig.h
+├── board_config.h      # 보드 정보 API (초기화 코드 없음)
+└── board_config.c      # 보드 정보만 제공
+
+modules/gps/
+├── gps_port.h/c        # 보드별 핀맵 + GPS 타입별 초기화
+├── gps_app.h/c         # GPS 태스크 (태스크 내부에서 초기화)
+
+modules/comm/
+├── ble_port.h/c        # BLE 핀맵 + 초기화
+├── rs485_port.h/c      # RS485 핀맵 + 초기화
+└── lora_port.h/c       # LoRa 핀맵 + 초기화
 ```
 
 ---
 
-## 💻 주요 기능
+## 💡 핵심 설계 원칙
 
-### 1. 보드별 초기화 시퀀스
+### 1. 핀맵은 각 모듈 내부에서 관리
 
-각 보드의 특성에 맞게 자동으로 초기화됩니다:
+각 모듈(GPS, BLE, RS485 등)이 자신의 핀맵을 내부에서 관리합니다.
 
-**UM982 GPS (PCB2, PCB4)**
-- Reset 후 RDY 신호 대기 (최대 5초)
-- RDY 확인 후 UART 통신 시작
-- 설정 명령 전송
+**장점:**
+- ✅ 모듈 독립성 유지
+- ✅ 다른 프로젝트에 재사용 쉬움
+- ✅ 각 모듈이 필요한 핀만 알면 됨
 
-**F9P GPS (PCB1, PCB3)**
-- Reset 후 즉시 사용 가능
-- UBX 프로토콜 설정
-
-**듀얼 GPS (PCB3)**
-- GPS1, GPS2 순차 초기화
-- 각각 독립적인 UART 사용
-
-### 2. 보드별 핀맵 자동 적용
-
-`config/board_pinmap.h`에 정의된 핀맵이 자동으로 적용됩니다:
-
+**예시: modules/gps/gps_port.c**
 ```c
-// PCB1: USART2로 F9P GPS 연결
-// PCB2: USART2로 UM982 GPS 연결 + RDY 핀
-// PCB3: USART2로 GPS1, USART3으로 GPS2 연결
-// PCB4: USART2로 UM982 GPS 연결 + RDY 핀
+#if defined(BOARD_TYPE_PCB1)
+    #define GPS1_UART    USART2
+    #define GPS1_TX_PIN  LL_GPIO_PIN_2
+    // ...
+#elif defined(BOARD_TYPE_PCB2)
+    // UM982용 핀맵
+#endif
 ```
 
-### 3. 조건부 컴파일
+### 2. 초기화는 각 태스크에서 수행
 
-사용하지 않는 모듈은 자동으로 제외됩니다:
+FreeRTOS 태스크 내부에서 모듈을 초기화합니다.
 
+**장점:**
+- ✅ vTaskDelay 사용 가능 (UM982 RDY 대기 등)
+- ✅ 모듈 독립성 유지
+- ✅ 동적 초기화 가능
+
+**예시: modules/gps/gps_app.c**
 ```c
-// PCB1, PCB2만 BLE 코드 포함
-#if HAS_BLE
-    ble_init();
-#endif
+static void gps_process_task(void *pvParameter) {
+  // 태스크 내부에서 초기화
+  gps_init(&gps_handle);        // 라이브러리 초기화
+  gps_port_init();              // 하드웨어 초기화
+  gps_start();                  // GPS 시작 (타입별 초기화)
 
-// PCB3, PCB4만 RS485 코드 포함
-#if HAS_RS485
-    rs485_init();
-#endif
+  while (1) {
+    // 메인 루프
+  }
+}
+```
+
+### 3. board_config는 정보만 제공
+
+`board_config`는 초기화 코드가 없고 보드 정보만 제공합니다.
+
+**제공하는 정보:**
+- 현재 보드 타입
+- GPS 타입 (F9P / UM982)
+- GPS 개수 (1 or 2)
+- 통신 인터페이스 (BLE / RS485 / LoRa)
+
+**사용 예시:**
+```c
+const board_config_t* config = board_get_config();
+
+if (config->gps_primary == GPS_TYPE_F9P) {
+    // F9P 처리
+} else if (config->gps_primary == GPS_TYPE_UM982) {
+    // UM982 처리
+}
 ```
 
 ---
 
-## 📝 코드 사용 예시
+## 📝 GPS 초기화 과정
 
-### 메인 함수
+### F9P GPS (PCB1, PCB3)
+
+```c
+void gps_init_f9p(void) {
+  // 1. Reset 핀 HIGH
+  HAL_GPIO_WritePin(GPS1_RESET_PORT, GPS1_RESET_PIN, GPIO_PIN_SET);
+
+  // 2. 즉시 사용 가능 - 대기 불필요
+
+  // 3. UBX 설정 명령 전송 (optional)
+}
+```
+
+### UM982 GPS (PCB2, PCB4)
+
+```c
+void gps_init_um982(void) {
+  // 1. Reset 핀 토글
+  HAL_GPIO_WritePin(GPS1_RESET_PORT, GPS1_RESET_PIN, GPIO_PIN_RESET);
+  vTaskDelay(pdMS_TO_TICKS(100));
+  HAL_GPIO_WritePin(GPS1_RESET_PORT, GPS1_RESET_PIN, GPIO_PIN_SET);
+
+  // 2. UART로 RDY 응답 대기 (최대 5초)
+  if (!gps_wait_for_um982_ready(5000)) {
+    // 타임아웃 에러 처리
+    return;
+  }
+
+  // 3. 설정 명령 전송
+}
+```
+
+### UM982 RDY 확인 (UART 파싱)
+
+```c
+static bool gps_wait_for_um982_ready(uint32_t timeout_ms) {
+  // TODO: gps_recv 버퍼에서 RDY 메시지 파싱
+  // 예: "$GNGGA" 같은 NMEA 메시지 수신 확인
+  // 또는 UM982 전용 RDY 응답 메시지 확인
+
+  while (타임아웃_전) {
+    if (strstr(gps_recv, "RDY") != NULL) {
+      return true;  // RDY 수신 성공
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+
+  return false;  // 타임아웃
+}
+```
+
+---
+
+## 🔧 코드 사용 예시
+
+### 보드 정보 확인
 
 ```c
 #include "board_config.h"
 
-int main(void) {
-    HAL_Init();
-    SystemClock_Config();
-
-    // 보드 자동 초기화
-    board_init();  // GPS, BLE/RS485, LoRa 등 모두 초기화
-
-    // 보드 정보 확인
+void print_board_info(void) {
     const board_config_t* config = board_get_config();
+
     printf("Board: %s\n", config->board_name);
     printf("GPS Count: %d\n", config->gps_count);
 
-    // FreeRTOS 시작
-    vTaskStartScheduler();
-}
-```
-
-### 보드별 동작 확인
-
-```c
-void setup_modules(void) {
-    // GPS 개수 확인
-    uint8_t gps_count = board_get_gps_count();
-    if (gps_count == 2) {
-        printf("Dual GPS mode\n");
+    if (config->gps_primary == GPS_TYPE_F9P) {
+        printf("GPS: F9P\n");
+    } else if (config->gps_primary == GPS_TYPE_UM982) {
+        printf("GPS: UM982\n");
     }
 
-    // 특정 인터페이스 사용 여부 확인
     if (board_has_interface(COMM_TYPE_BLE)) {
         printf("BLE available\n");
     }
-
-    if (board_has_interface(COMM_TYPE_RS485)) {
-        printf("RS485 available\n");
-    }
 }
 ```
 
-### 조건부 컴파일 활용
+### 조건부 컴파일
 
 ```c
 void init_communication(void) {
     // BLE 초기화 (PCB1, PCB2만 컴파일됨)
     #if HAS_BLE
-        ble_module_init();
-        printf("BLE initialized\n");
+        ble_init();
     #endif
 
     // RS485 초기화 (PCB3, PCB4만 컴파일됨)
     #if HAS_RS485
-        rs485_driver_init();
-        printf("RS485 initialized\n");
+        rs485_init();
     #endif
 
     // LoRa 초기화 (모든 보드)
     #if HAS_LORA
-        lora_module_init();
-        printf("LoRa initialized\n");
+        lora_init();
     #endif
 }
 ```
@@ -170,123 +229,64 @@ void init_communication(void) {
 
 ```c
 void process_gps_data(void) {
-    const board_config_t* config = board_get_config();
-
-    // GPS 타입별 처리
+    // 컴파일 타임에 결정
     #if GPS_PRIMARY == GPS_TYPE_F9P
-        // F9P는 UBX 프로토콜 사용
-        process_ubx_data();
+        // F9P UBX 처리
     #elif GPS_PRIMARY == GPS_TYPE_UM982
-        // UM982는 NMEA + 바이너리
-        process_um982_data();
+        // UM982 처리
     #endif
 
-    // 듀얼 GPS 처리 (PCB3만)
-    #if GPS_COUNT == 2
-        process_secondary_gps();
-    #endif
-}
-```
-
----
-
-## 🔧 초기화 시퀀스 상세
-
-### board_init() 동작 순서
-
-```
-1. 공통 모듈 초기화
-   - LED 초기화 (optional)
-
-2. GPS 초기화
-   [PCB1, PCB3] F9P GPS:
-     └─ Reset 핀 HIGH
-     └─ 즉시 사용 가능
-     └─ UBX 설정 명령 전송
-
-   [PCB2, PCB4] UM982 GPS:
-     └─ Reset 핀 토글
-     └─ RDY 신호 대기 (최대 5초)
-     └─ RDY 확인 후 설정 명령 전송
-
-   [PCB3] 듀얼 GPS:
-     └─ GPS1 초기화
-     └─ GPS2 초기화
-
-3. 통신 인터페이스 초기화
-   [PCB1, PCB2] BLE:
-     └─ Reset 핀 토글
-     └─ 부팅 대기 (500ms)
-     └─ AT 명령으로 설정
-
-   [PCB3, PCB4] RS485:
-     └─ DE/RE 핀 초기화 (수신 모드)
-     └─ UART 설정
-
-   [모든 보드] LoRa:
-     └─ Reset 핀 토글
-     └─ 부팅 대기 (500ms)
-     └─ 설정 명령 전송
-
-4. LTE(EC25) 초기화
-   └─ 모든 보드 공통
-```
-
----
-
-## 🎯 핀맵 커스터마이징
-
-보드별로 핀이 다르다면 `config/board_pinmap.h`를 수정하세요:
-
-```c
-#if defined(BOARD_TYPE_PCB1)
-    #define GPS1_UART                   USART2
-    #define GPS1_UART_TX_PIN            GPIO_PIN_2
-    #define GPS1_UART_RX_PIN            GPIO_PIN_3
-    // ... 실제 하드웨어에 맞게 수정
-#endif
-```
-
----
-
-## ⚙️ 고급 기능
-
-### 런타임 보드 정보 활용
-
-```c
-void print_board_info(void) {
+    // 런타임에 결정 (필요한 경우)
     const board_config_t* config = board_get_config();
-
-    printf("=== Board Info ===\n");
-    printf("Name: %s\n", config->board_name);
-    printf("GPS Primary: %s\n",
-        config->gps_primary == GPS_TYPE_F9P ? "F9P" : "UM982");
-
-    if (config->gps_count == 2) {
-        printf("GPS Secondary: F9P\n");
+    if (config->gps_primary == GPS_TYPE_UM982) {
+        // UM982 전용 처리
     }
-
-    printf("Interfaces:\n");
-    if (config->comm_interfaces & COMM_TYPE_BLE)
-        printf("  - BLE\n");
-    if (config->comm_interfaces & COMM_TYPE_RS485)
-        printf("  - RS485\n");
-    if (config->comm_interfaces & COMM_TYPE_LORA)
-        printf("  - LoRa\n");
 }
 ```
 
-### 에러 처리
+---
+
+## 🎯 새 모듈 추가하기
+
+예: BLE 모듈 추가
+
+### 1. 파일 생성
+
+```
+modules/comm/
+├── ble_port.h
+└── ble_port.c
+```
+
+### 2. ble_port.c 작성
 
 ```c
-void init_with_error_check(void) {
-    const board_config_t* config = board_get_config();
+#include "ble_port.h"
+#include "board_config.h"
 
-    // UM982는 RDY 대기 실패 가능
-    #if GPS_PRIMARY == GPS_TYPE_UM982
-        if (!um982_wait_for_ready(5000)) {
-            LOG_ERR("UM982 initialization failed!");
-            // 폴백 처리
+/* 보드별 핀맵 */
+#if defined(BOARD_TYPE_PCB1) || defined(BOARD_TYPE_PCB2)
+    #define BLE_UART          UART4
+    #define BLE_TX_PIN        GPIO_PIN_0
+    #define BLE_RX_PIN        GPIO_PIN_1
+    #define BLE_RESET_PIN     GPIO_PIN_8
+    // ...
+#endif
+
+void ble_init(void) {
+    // BLE 초기화 코드
+}
+```
+
+### 3. 태스크에서 사용
+
+```c
+void ble_task(void *pvParameter) {
+    #if HAS_BLE
+        ble_init();  // 태스크 내부에서 초기화
+
+        while (1) {
+            // BLE 처리
         }
     #endif
 }
@@ -294,33 +294,59 @@ void init_with_error_check(void) {
 
 ---
 
-## 🎉 장점
+## ✅ 장점
 
-✅ **하나의 프로젝트** - 소스 코드 통일 관리
-✅ **쉬운 보드 변경** - 파일 한 줄 수정
-✅ **자동 최적화** - 불필요한 코드 제거
-✅ **안전한 빌드** - 잘못된 설정 시 컴파일 에러
-✅ **보드별 초기화** - GPS RDY 대기, 핀맵 자동 적용
-✅ **유지보수 편리** - 공통 코드 한 곳에서 관리
+**모듈 독립성**
+- 각 모듈이 자신의 핀맵과 초기화 코드 관리
+- 다른 프로젝트에 재사용 쉬움
+
+**유연한 초기화**
+- 태스크 내부에서 초기화 → FreeRTOS API 사용 가능
+- UM982 RDY 대기 같은 블로킹 동작 가능
+
+**깔끔한 구조**
+- board_config는 정보만 제공
+- 초기화 로직은 각 모듈에 분산
+
+**컴파일러 최적화**
+- 사용하지 않는 코드 자동 제거
+- 각 보드에 최적화된 바이너리
 
 ---
 
 ## 📌 다음 단계
 
-이제 각 모듈의 실제 드라이버를 구현하면 됩니다:
+1. **UM982 RDY 파싱 구현**
+   - `gps_wait_for_um982_ready()` 함수에서 실제 RDY 메시지 파싱
 
-1. **GPS 드라이버**
-   - `gps_f9p_configure()` - F9P UBX 설정
-   - `gps_um982_configure()` - UM982 설정
+2. **듀얼 GPS 지원 (PCB3)**
+   - GPS2 포트 초기화
+   - 두 GPS 데이터 동시 처리
 
-2. **통신 드라이버**
-   - `ble_init()` - BLE 모듈 초기화
-   - `rs485_init()` - RS485 드라이버
-   - `lora_init()` - LoRa 모듈 초기화
+3. **통신 모듈 구현**
+   - `modules/comm/ble_port.c`
+   - `modules/comm/rs485_port.c`
+   - `modules/comm/lora_port.c`
 
-3. **기존 코드 통합**
-   - `main.c`에서 `board_init()` 호출
-   - 기존 GPS 초기화 코드를 보드별로 분리
+---
+
+## 🔍 FAQ
+
+**Q: 핀맵을 중앙에서 관리하는 게 낫지 않나요?**
+
+A: 모듈 독립성을 위해 각 모듈 내부에서 관리합니다. 다른 프로젝트에 재사용할 때 의존성이 줄어듭니다.
+
+**Q: 초기화를 main()에서 하는 게 낫지 않나요?**
+
+A: FreeRTOS 시작 전에는 vTaskDelay를 사용할 수 없어서, UM982 RDY 대기 같은 블로킹 동작이 불가능합니다. 태스크 내부에서 초기화하면 FreeRTOS API를 자유롭게 사용할 수 있습니다.
+
+**Q: board_config에서 초기화를 하지 않나요?**
+
+A: 이제 하지 않습니다! board_config는 정보만 제공하고, 실제 초기화는 각 모듈의 port 파일과 태스크에서 수행합니다.
+
+**Q: UM982 RDY가 GPIO인가요, UART 메시지인가요?**
+
+A: 이 구현에서는 UART 파싱으로 처리합니다. GPIO RDY 핀이 있다면 코드를 수정하면 됩니다.
 
 ---
 

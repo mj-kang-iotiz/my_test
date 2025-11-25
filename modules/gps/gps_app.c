@@ -1,6 +1,7 @@
 #include "gps_app.h"
 #include "gps.h"
 #include "gps_port.h"
+#include "board_config.h"
 #include "led.h"
 #include <string.h>
 
@@ -159,8 +160,16 @@ static void gps_process_task(void *pvParameter) {
   gps_set_evt_handler(&gps_handle, gps_evt_handler);
   memset(&gga_avg_data, 0, sizeof(gga_avg_data));
 
+  // GPS 초기화 (태스크 내부에서 수행)
+  // 1. GPS 라이브러리 초기화
   gps_init(&gps_handle);
+
+  // 2. 하드웨어 포트 초기화 (UART, DMA 등)
   gps_port_init();
+
+  // 3. GPS 통신 시작 (보드별 GPS 타입에 맞춰 초기화)
+  //    - F9P: Reset 후 즉시 시작
+  //    - UM982: Reset 후 UART RDY 응답 대기
   gps_start();
 
   led_set_color(2, LED_COLOR_RED);

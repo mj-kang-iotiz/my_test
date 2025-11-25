@@ -9,10 +9,6 @@
 
 /**
  * @brief 보드 타입 정의
- * PCB1: F9P GPS + BLE + LoRa
- * PCB2: UM982 GPS + BLE + LoRa
- * PCB3: F9P GPS x2 + RS485 + LoRa
- * PCB4: UM982 GPS + RS485 + LoRa
  */
 typedef enum {
     BOARD_TYPE_UNKNOWN = 0,
@@ -33,7 +29,7 @@ typedef enum {
 } gps_type_t;
 
 /**
- * @brief 통신 타입
+ * @brief 통신 타입 (비트마스크)
  */
 typedef enum {
     COMM_TYPE_NONE = 0,
@@ -54,13 +50,9 @@ typedef struct {
     const char* board_name;
 } board_config_t;
 
-/* ===== 컴파일 타임 보드 설정 ===== */
-
-// 빌드 시 다음 중 하나를 정의:
-// -DBOARD_TYPE_PCB1
-// -DBOARD_TYPE_PCB2
-// -DBOARD_TYPE_PCB3
-// -DBOARD_TYPE_PCB4
+/* ============================================================
+ * 컴파일 타임 보드 설정
+ * ============================================================ */
 
 #if defined(BOARD_TYPE_PCB1)
     #define CURRENT_BOARD BOARD_TYPE_PCB1_F9P_BLE
@@ -102,28 +94,15 @@ typedef struct {
     #error "Board type not defined! Define one of: BOARD_TYPE_PCB1, BOARD_TYPE_PCB2, BOARD_TYPE_PCB3, BOARD_TYPE_PCB4"
 #endif
 
-/**
- * @brief 보드 초기화
- */
-void board_init(void);
+/* ============================================================
+ * API 함수
+ * ============================================================ */
 
 /**
  * @brief 현재 보드 설정 가져오기
  * @return const board_config_t* 보드 설정 포인터
  */
 const board_config_t* board_get_config(void);
-
-/**
- * @brief GPS 타입에 따른 초기화
- * @param gps_type GPS 타입
- * @param instance GPS 인스턴스 (0: primary, 1: secondary)
- */
-void board_init_gps(gps_type_t gps_type, uint8_t instance);
-
-/**
- * @brief 통신 인터페이스 초기화
- */
-void board_init_comm_interfaces(void);
 
 /**
  * @brief 현재 보드의 GPS 개수 반환
