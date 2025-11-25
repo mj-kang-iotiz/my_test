@@ -44,4 +44,17 @@ typedef enum {
   GPS_PARSE_STATE_INVALID = UINT8_MAX
 } gps_parse_state_t;
 
+/**
+ * @brief GPS 메시지 타입 (프로토콜별 구분)
+ *
+ */
+typedef union {
+  uint8_t nmea_msg;  // NMEA 메시지 타입 (GPS_NMEA_MSG_GGA, GPS_NMEA_MSG_RMC)
+  struct {
+    uint8_t class;   // UBX 메시지 클래스 (GPS_UBX_CLASS_NAV)
+    uint8_t id;      // UBX 메시지 ID (GPS_UBX_NAV_ID_HPPOSLLH)
+  } ubx;
+  uint16_t raw;      // 직접 접근용
+} gps_msg_t;
+
 #endif

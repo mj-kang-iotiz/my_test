@@ -123,18 +123,29 @@ void gps_task_create(void *arg) {
   xTaskCreate(gps_process_task, "gps", 2048, arg, tskIDLE_PRIORITY + 1, NULL);
 }
 
-void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, uint8_t msg)
+void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, gps_msg_t msg)
 {
   switch(protocol)
   {
     case GPS_PROTOCOL_NMEA:
-      if(msg == GPS_NMEA_MSG_GGA)
+      if(msg.nmea_msg == GPS_NMEA_MSG_GGA)
       {
         if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
         {
           _add_gga_avg_data(gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
         }
       }
+      break;
+
+    case GPS_PROTOCOL_UBX:
+      if(msg.ubx.class == GPS_UBX_CLASS_NAV && msg.ubx.id == GPS_UBX_NAV_ID_HPPOSLLH)
+      {
+        // UBX NAV-HPPOSLLH 메시지 처리
+        // TODO: UBX 데이터 처리 로직 추가
+      }
+      break;
+
+    default:
       break;
   }
 }

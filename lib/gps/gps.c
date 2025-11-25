@@ -166,6 +166,12 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
         gps->state = GPS_PARSE_STATE_NMEA_CHKSUM;
       } else if (*d == '\r') {
         if (check_nmea_chksum(gps)) {
+          // 체크섬 검증 성공 시 핸들러 호출
+          if (gps->handler && gps->nmea.msg_type != GPS_NMEA_MSG_NONE) {
+            gps_msg_t msg;
+            msg.nmea_msg = gps->nmea.msg_type;
+            gps->handler(gps, GPS_PROTOCOL_NMEA, msg);
+          }
         }
 
         if(gps->nmea.msg_type == GPS_NMEA_MSG_GGA)

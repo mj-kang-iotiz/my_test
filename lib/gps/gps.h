@@ -22,7 +22,7 @@ typedef struct {
   int (*recv)(char *buf, size_t len);
 } gps_hal_ops_t;
 
-typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, uint8_t msg);
+typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, gps_msg_t msg);
 
 /**
  * @brief GPS 구조체

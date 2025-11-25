@@ -101,6 +101,15 @@ uint8_t gps_parse_ubx(gps_t *gps) {
 
       if (check_ubx_chksum(gps)) {
         store_ubx_data(gps);
+
+        // 체크섬 검증 성공 시 핸들러 호출
+        if (gps->handler) {
+          gps_msg_t msg;
+          msg.ubx.class = gps->ubx.class;
+          msg.ubx.id = gps->ubx.id;
+          gps->handler(gps, GPS_PROTOCOL_UBX, msg);
+        }
+
         gps->protocol = GPS_PROTOCOL_NONE;
         gps->state = GPS_PARSE_STATE_NONE;
 
