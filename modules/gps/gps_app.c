@@ -127,8 +127,11 @@ static void gps_process_task(void *pvParameter)
   gps_set_evt_handler(&inst->handle, gps_evt_handler);
   memset(&inst->gga_avg_data, 0, sizeof(inst->gga_avg_data));
 
-  led_set_color(LED_ID_2, LED_COLOR_RED);
-  led_set_state(LED_ID_2, true);
+  // GPS별로 다른 LED 할당 (첫 번째: LED_ID_2, 두 번째: LED_ID_3)
+  uint8_t led_id = (id == GPS_ID_BASE) ? LED_ID_2 : LED_ID_3;
+
+  led_set_color(led_id, LED_COLOR_RED);
+  led_set_state(led_id, true);
 
   while (1) {
     xQueueReceive(inst->queue, &dummy, portMAX_DELAY);
@@ -136,22 +139,22 @@ static void gps_process_task(void *pvParameter)
     // LED status based on GPS fix quality
     if(inst->handle.nmea_data.gga.fix == GPS_FIX_INVALID)
     {
-      led_set_color(LED_ID_2, LED_COLOR_RED);
+      led_set_color(led_id, LED_COLOR_RED);
     }
     else if(inst->handle.nmea_data.gga.fix < GPS_FIX_RTK_FIX)
     {
-      led_set_color(LED_ID_2, LED_COLOR_YELLOW);
+      led_set_color(led_id, LED_COLOR_YELLOW);
     }
     else if(inst->handle.nmea_data.gga.fix >= GPS_FIX_RTK_FLOAT)
     {
-      led_set_color(LED_ID_2, LED_COLOR_GREEN);
+      led_set_color(led_id, LED_COLOR_GREEN);
     }
     else
     {
-      led_set_color(LED_ID_2, LED_COLOR_NONE);
+      led_set_color(led_id, LED_COLOR_NONE);
     }
 
-    led_set_toggle(LED_ID_2);
+    led_set_toggle(led_id);
 
     xSemaphoreTake(inst->handle.mutex, portMAX_DELAY);
     pos = gps_port_get_rx_pos(id);
