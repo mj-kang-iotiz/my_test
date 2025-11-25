@@ -1,156 +1,117 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-/**
- * ============================================================================
- * PCB 버전 선택
- * ============================================================================
- * 빌드시 -DBOARD_VERSION=1 형태로 지정 또는 여기서 직접 설정
- */
-#ifndef BOARD_VERSION
-#define BOARD_VERSION 1  // 기본값: Board V1
-#endif
-
-/**
- * ============================================================================
- * GPS 타입 정의
- * ============================================================================
- */
-#define GPS_TYPE_UNICORE  1
-#define GPS_TYPE_UBLOX    2
-
-/**
- * ============================================================================
- * GPS 역할 정의
- * ============================================================================
- */
-#define GPS_ROLE_BASE     1
-#define GPS_ROLE_ROVER    2
+#include <stdint.h>
+#include <stdbool.h>
+#include "board_type.h"
 
 /**
  * ============================================================================
  * 보드별 설정
  * ============================================================================
  */
+#if defined(BOARD_TYPE_BASE_UNICORE)
+    #define BOARD_TYPE BOARD_TYPE_BASE_UM982
+    #define GPS1_TYPE GPS_TYPE_UM982
+    #define GPS2_TYPE GPS_TYPE_NONE
+    #define GPS_CNT 1
+    #define LORA_MODE LORA_MODE_TX_ONLY
+    #define USE_BLE 1
+    #define USE_RS485 0
+    #define USE_GSM 1
 
-#if BOARD_VERSION == 1
-  /* ========== Board V1: Unicore Base ========== */
-  #define BOARD_NAME          "UNICORE-BASE-V1"
-  #define BOARD_DESCRIPTION   "Unicore GPS Base Station"
+#elif defined(BOARD_TYPE_BASE_UBLOX)
+    #define BOARD_TYPE BOARD_TYPE_BASE_F9P
+    #define GPS1_TYPE GPS_TYPE_F9P
+    #define GPS2_TYPE GPS_TYPE_NONE
+    #define GPS_CNT 1
+    #define LORA_MODE LORA_MODE_TX_ONLY
+    #define USE_BLE 1
+    #define USE_RS485 0
+    #define USE_GSM 1
 
-  // GPS 설정
-  #define GPS_TYPE            GPS_TYPE_UNICORE
-  #define GPS_ROLE            GPS_ROLE_BASE
-  #define GPS_COUNT           1
+#elif defined(BOARD_TYPE_ROVER_UNICORE)
+    #define BOARD_TYPE BOARD_TYPE_ROVER_UM982
+    #define GPS1_TYPE GPS_TYPE_UM982
+    #define GPS2_TYPE GPS_TYPE_NONE
+    #define GPS_CNT 1
+    #define LORA_MODE LORA_MODE_RX_ONLY
+    #define USE_BLE 0
+    #define USE_RS485 1
+    #define USE_GSM 1
 
-  // GPS 인스턴스 활성화
-  #define GPS_BASE_ENABLE     1
-  #define GPS_ROVER_ENABLE    0
-  #define GPS_ROVER2_ENABLE   0  // Rover 두 번째 GPS
-
-  // 모듈 활성화
-  #define USE_LTE             1
-  #define USE_LORA            0
-  #define USE_RS485           1
-
-  // LED 설정
-  #define LED_COUNT           3
-
-#elif BOARD_VERSION == 2
-  /* ========== Board V2: Unicore Rover ========== */
-  #define BOARD_NAME          "UNICORE-ROVER-V1"
-  #define BOARD_DESCRIPTION   "Unicore GPS Rover"
-
-  // GPS 설정
-  #define GPS_TYPE            GPS_TYPE_UNICORE
-  #define GPS_ROLE            GPS_ROLE_ROVER
-  #define GPS_COUNT           1
-
-  // GPS 인스턴스 활성화
-  #define GPS_BASE_ENABLE     0
-  #define GPS_ROVER_ENABLE    1
-  #define GPS_ROVER2_ENABLE   0
-
-  // 모듈 활성화
-  #define USE_LTE             1
-  #define USE_LORA            0
-  #define USE_RS485           0  // Rover에는 RS485 없음
-
-  // LED 설정
-  #define LED_COUNT           3
-
-#elif BOARD_VERSION == 3
-  /* ========== Board V3: Ublox Base (F9P) ========== */
-  #define BOARD_NAME          "UBLOX-BASE-V1"
-  #define BOARD_DESCRIPTION   "Ublox F9P GPS Base Station"
-
-  // GPS 설정
-  #define GPS_TYPE            GPS_TYPE_UBLOX
-  #define GPS_ROLE            GPS_ROLE_BASE
-  #define GPS_COUNT           1
-
-  // GPS 인스턴스 활성화
-  #define GPS_BASE_ENABLE     1
-  #define GPS_ROVER_ENABLE    0
-  #define GPS_ROVER2_ENABLE   0
-
-  // 모듈 활성화
-  #define USE_LTE             1
-  #define USE_LORA            0
-  #define USE_RS485           1
-
-  // LED 설정
-  #define LED_COUNT           3
-
-#elif BOARD_VERSION == 4
-  /* ========== Board V4: Ublox Rover (Dual F9P) ========== */
-  #define BOARD_NAME          "UBLOX-ROVER-DUAL-V1"
-  #define BOARD_DESCRIPTION   "Ublox Dual F9P GPS Rover"
-
-  // GPS 설정
-  #define GPS_TYPE            GPS_TYPE_UBLOX
-  #define GPS_ROLE            GPS_ROLE_ROVER
-  #define GPS_COUNT           2  // ✅ F9P 2개
-
-  // GPS 인스턴스 활성화 (Rover에 2개)
-  #define GPS_BASE_ENABLE     0
-  #define GPS_ROVER_ENABLE    1   // Rover 첫 번째 F9P
-  #define GPS_ROVER2_ENABLE   1   // Rover 두 번째 F9P
-
-  // 모듈 활성화
-  #define USE_LTE             1
-  #define USE_LORA            0
-  #define USE_RS485           0
-
-  // LED 설정
-  #define LED_COUNT           3
+#elif defined(BOARD_TYPE_ROVER_UBLOX)
+    #define BOARD_TYPE BOARD_TYPE_ROVER_F9P
+    #define GPS1_TYPE GPS_TYPE_F9P
+    #define GPS2_TYPE GPS_TYPE_F9P
+    #define GPS_CNT 2  // ✅ F9P 2개
+    #define LORA_MODE LORA_MODE_RX_ONLY
+    #define USE_BLE 0
+    #define USE_RS485 1
+    #define USE_GSM 1
 
 #else
-  #error "Invalid BOARD_VERSION! Must be 1-4"
+    #define BOARD_TYPE BOARD_TYPE_NONE
+    #define GPS1_TYPE GPS_TYPE_NONE
+    #define GPS2_TYPE GPS_TYPE_NONE
+    #define GPS_CNT 0
+    #define LORA_MODE LORA_MODE_NONE
+    #define USE_BLE 0
+    #define USE_RS485 0
+    #define USE_GSM 0
 #endif
 
 /**
  * ============================================================================
- * GPS ID 정의 (보드 독립적)
+ * 타입 정의
  * ============================================================================
  */
+typedef enum
+{
+    BOARD_TYPE_NONE = 0,
+    BOARD_TYPE_BASE_UM982,
+    BOARD_TYPE_BASE_F9P,
+    BOARD_TYPE_ROVER_UM982,
+    BOARD_TYPE_ROVER_F9P
+} board_type_t;
+
+typedef enum
+{
+    GPS_TYPE_NONE = 0,
+    GPS_TYPE_F9P,
+    GPS_TYPE_UM982,
+} gps_type_t;
+
 typedef enum {
-  GPS_ID_BASE = 0,    // Base 또는 Rover 첫 번째
-  GPS_ID_ROVER = 1,   // Rover 두 번째 (V4만 해당)
-  GPS_ID_MAX
+    GPS_ID_BASE = 0,    // 기준국 GPS 또는 로버 첫 번째
+    GPS_ID_ROVER,       // 로버 두 번째 GPS (ROVER_UBLOX만 해당)
+    GPS_ID_MAX
 } gps_id_t;
 
-/**
- * ============================================================================
- * 컴파일 타임 체크
- * ============================================================================
- */
-#if GPS_COUNT > GPS_ID_MAX
-  #error "GPS_COUNT exceeds GPS_ID_MAX!"
-#endif
+typedef enum
+{
+    LORA_MODE_NONE = 0,
+    LORA_MODE_TX_ONLY,
+    LORA_MODE_RX_ONLY
+} lora_mode_t;
 
-#if GPS_ROVER2_ENABLE && (GPS_COUNT < 2)
-  #error "GPS_ROVER2_ENABLE requires GPS_COUNT >= 2"
-#endif
+/**
+ * @brief 보드 설정 구조체
+ */
+typedef struct
+{
+    board_type_t board;
+    gps_type_t gps[GPS_ID_MAX];
+    uint8_t gps_cnt;
+    lora_mode_t lora_mode;
+    bool use_ble;
+    bool use_rs485;
+    bool use_gsm;
+} board_config_t;
+
+/**
+ * @brief 현재 보드 설정 가져오기
+ */
+const board_config_t* board_get_config(void);
 
 #endif // BOARD_CONFIG_H
