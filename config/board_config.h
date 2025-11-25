@@ -125,4 +125,17 @@ void board_init_gps(gps_type_t gps_type, uint8_t instance);
  */
 void board_init_comm_interfaces(void);
 
+/**
+ * @brief 현재 보드의 GPS 개수 반환
+ * @return GPS 개수
+ */
+uint8_t board_get_gps_count(void);
+
+/**
+ * @brief 특정 통신 인터페이스 사용 여부 확인
+ * @param comm_type 확인할 통신 타입
+ * @return true: 사용, false: 사용 안 함
+ */
+bool board_has_interface(comm_type_t comm_type);
+
 #endif /* BOARD_CONFIG_H */

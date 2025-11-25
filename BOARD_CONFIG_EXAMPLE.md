@@ -1,9 +1,8 @@
 # 멀티 PCB 펌웨어 설정 가이드
 
-이 프로젝트는 **하나의 소스 코드**로 4가지 PCB 버전을 지원합니다.
-빌드 전에 보드 타입만 선택하면 됩니다!
+하나의 소스 코드로 4가지 PCB 버전을 지원합니다!
 
-## 지원 보드 타입
+## 지원 보드
 
 | 보드 | GPS | 통신 |
 |------|-----|------|
@@ -16,86 +15,91 @@
 
 ## 🚀 빠른 시작
 
-### 방법 1: 스크립트 사용 (추천)
+### 1. 보드 선택
 
-```bash
-# 원하는 보드 선택
-./select_board.sh PCB1
-
-# 빌드 (STM32CubeIDE에서 Build)
-# 빌드하면 선택한 보드용 펌웨어가 생성됩니다!
-```
-
-**사용 예시:**
-```bash
-$ ./select_board.sh PCB2
-✅ 보드가 PCB2 (UM982 + BLE + LoRa)로 설정되었습니다.
-
-이제 프로젝트를 빌드하세요!
-```
-
-### 방법 2: 수동 설정
-
-`config/board_type.h` 파일을 열어서 원하는 보드의 주석을 해제:
+`config/board_type.h` 파일을 열어서 사용할 보드만 활성화:
 
 ```c
-// 예: PCB2를 사용하려면
-// #define BOARD_TYPE_PCB1     // F9P + BLE + LoRa
-#define BOARD_TYPE_PCB2        // UM982 + BLE + LoRa  ← 이거만 활성화
-// #define BOARD_TYPE_PCB3     // F9P x2 + RS485 + LoRa
-// #define BOARD_TYPE_PCB4     // UM982 + RS485 + LoRa
+/* ====== 아래 중 하나만 선택 (나머지는 주석 처리) ====== */
+
+#define BOARD_TYPE_PCB1     // F9P + BLE + LoRa
+// #define BOARD_TYPE_PCB2  // UM982 + BLE + LoRa
+// #define BOARD_TYPE_PCB3  // F9P x2 + RS485 + LoRa
+// #define BOARD_TYPE_PCB4  // UM982 + RS485 + LoRa
 ```
 
-저장 후 빌드!
+### 2. 빌드
+
+STM32CubeIDE에서 **Project → Build Project**
+
+끝! ✨
 
 ---
 
-## 📝 상세 사용법
+## 📁 파일 구조
 
-### 보드 선택 스크립트
-
-`select_board.sh` 스크립트는 `config/board_type.h` 파일을 자동으로 생성합니다.
-
-```bash
-# 사용법
-./select_board.sh [PCB1|PCB2|PCB3|PCB4]
-
-# 예시
-./select_board.sh PCB1  # F9P + BLE + LoRa
-./select_board.sh PCB2  # UM982 + BLE + LoRa
-./select_board.sh PCB3  # F9P x2 + RS485 + LoRa
-./select_board.sh PCB4  # UM982 + RS485 + LoRa
 ```
-
-### 빌드 방법
-
-#### STM32CubeIDE 사용 시
-
-1. 보드 선택: `./select_board.sh PCB1`
-2. STM32CubeIDE에서 **Project → Build Project**
-3. 완료!
-
-#### 커맨드라인 빌드 (Makefile 있는 경우)
-
-```bash
-# 1. 보드 선택
-./select_board.sh PCB1
-
-# 2. 빌드
-make clean
-make
-
-# 또는 한 줄로
-./select_board.sh PCB1 && make clean && make
+config/
+├── board_type.h        # 보드 선택 (여기서 수정!)
+├── board_config.h      # 보드 설정 API
+├── board_config.c      # 보드별 초기화 구현
+├── board_pinmap.h      # 보드별 핀맵 정의
+└── FreeRTOSConfig.h
 ```
 
 ---
 
-## 💻 코드 사용 예시
+## 💻 주요 기능
 
-빌드 시 선택한 보드에 맞춰 자동으로 코드가 최적화됩니다.
+### 1. 보드별 초기화 시퀀스
 
-### 기본 사용
+각 보드의 특성에 맞게 자동으로 초기화됩니다:
+
+**UM982 GPS (PCB2, PCB4)**
+- Reset 후 RDY 신호 대기 (최대 5초)
+- RDY 확인 후 UART 통신 시작
+- 설정 명령 전송
+
+**F9P GPS (PCB1, PCB3)**
+- Reset 후 즉시 사용 가능
+- UBX 프로토콜 설정
+
+**듀얼 GPS (PCB3)**
+- GPS1, GPS2 순차 초기화
+- 각각 독립적인 UART 사용
+
+### 2. 보드별 핀맵 자동 적용
+
+`config/board_pinmap.h`에 정의된 핀맵이 자동으로 적용됩니다:
+
+```c
+// PCB1: USART2로 F9P GPS 연결
+// PCB2: USART2로 UM982 GPS 연결 + RDY 핀
+// PCB3: USART2로 GPS1, USART3으로 GPS2 연결
+// PCB4: USART2로 UM982 GPS 연결 + RDY 핀
+```
+
+### 3. 조건부 컴파일
+
+사용하지 않는 모듈은 자동으로 제외됩니다:
+
+```c
+// PCB1, PCB2만 BLE 코드 포함
+#if HAS_BLE
+    ble_init();
+#endif
+
+// PCB3, PCB4만 RS485 코드 포함
+#if HAS_RS485
+    rs485_init();
+#endif
+```
+
+---
+
+## 📝 코드 사용 예시
+
+### 메인 함수
 
 ```c
 #include "board_config.h"
@@ -104,87 +108,165 @@ int main(void) {
     HAL_Init();
     SystemClock_Config();
 
-    // 보드 초기화 (선택한 보드에 맞춰 자동 초기화)
-    board_init();
+    // 보드 자동 초기화
+    board_init();  // GPS, BLE/RS485, LoRa 등 모두 초기화
 
-    // 현재 보드 정보 확인
+    // 보드 정보 확인
     const board_config_t* config = board_get_config();
     printf("Board: %s\n", config->board_name);
     printf("GPS Count: %d\n", config->gps_count);
 
-    while(1) {
-        // 메인 루프
+    // FreeRTOS 시작
+    vTaskStartScheduler();
+}
+```
+
+### 보드별 동작 확인
+
+```c
+void setup_modules(void) {
+    // GPS 개수 확인
+    uint8_t gps_count = board_get_gps_count();
+    if (gps_count == 2) {
+        printf("Dual GPS mode\n");
+    }
+
+    // 특정 인터페이스 사용 여부 확인
+    if (board_has_interface(COMM_TYPE_BLE)) {
+        printf("BLE available\n");
+    }
+
+    if (board_has_interface(COMM_TYPE_RS485)) {
+        printf("RS485 available\n");
     }
 }
 ```
 
-### 조건부 컴파일
-
-선택한 보드에 따라 필요한 코드만 컴파일됩니다:
+### 조건부 컴파일 활용
 
 ```c
-#include "board_config.h"
-
-void setup_communication(void) {
+void init_communication(void) {
     // BLE 초기화 (PCB1, PCB2만 컴파일됨)
     #if HAS_BLE
-        ble_init();
+        ble_module_init();
         printf("BLE initialized\n");
     #endif
 
     // RS485 초기화 (PCB3, PCB4만 컴파일됨)
     #if HAS_RS485
-        rs485_init();
+        rs485_driver_init();
         printf("RS485 initialized\n");
     #endif
 
     // LoRa 초기화 (모든 보드)
     #if HAS_LORA
-        lora_init();
+        lora_module_init();
         printf("LoRa initialized\n");
-    #endif
-}
-
-void setup_gps(void) {
-    // 듀얼 GPS (PCB3만 컴파일됨)
-    #if GPS_COUNT == 2
-        printf("Dual GPS mode\n");
-        gps_init_primary();
-        gps_init_secondary();
-    #else
-        printf("Single GPS mode\n");
-        gps_init_primary();
-    #endif
-
-    // GPS 타입별 설정
-    #if GPS_PRIMARY == GPS_TYPE_F9P
-        printf("Using F9P GPS\n");
-        // F9P 전용 설정
-    #elif GPS_PRIMARY == GPS_TYPE_UM982
-        printf("Using UM982 GPS\n");
-        // UM982 전용 설정
     #endif
 }
 ```
 
-### 런타임 보드 정보 확인
+### GPS 타입별 처리
+
+```c
+void process_gps_data(void) {
+    const board_config_t* config = board_get_config();
+
+    // GPS 타입별 처리
+    #if GPS_PRIMARY == GPS_TYPE_F9P
+        // F9P는 UBX 프로토콜 사용
+        process_ubx_data();
+    #elif GPS_PRIMARY == GPS_TYPE_UM982
+        // UM982는 NMEA + 바이너리
+        process_um982_data();
+    #endif
+
+    // 듀얼 GPS 처리 (PCB3만)
+    #if GPS_COUNT == 2
+        process_secondary_gps();
+    #endif
+}
+```
+
+---
+
+## 🔧 초기화 시퀀스 상세
+
+### board_init() 동작 순서
+
+```
+1. 공통 모듈 초기화
+   - LED 초기화 (optional)
+
+2. GPS 초기화
+   [PCB1, PCB3] F9P GPS:
+     └─ Reset 핀 HIGH
+     └─ 즉시 사용 가능
+     └─ UBX 설정 명령 전송
+
+   [PCB2, PCB4] UM982 GPS:
+     └─ Reset 핀 토글
+     └─ RDY 신호 대기 (최대 5초)
+     └─ RDY 확인 후 설정 명령 전송
+
+   [PCB3] 듀얼 GPS:
+     └─ GPS1 초기화
+     └─ GPS2 초기화
+
+3. 통신 인터페이스 초기화
+   [PCB1, PCB2] BLE:
+     └─ Reset 핀 토글
+     └─ 부팅 대기 (500ms)
+     └─ AT 명령으로 설정
+
+   [PCB3, PCB4] RS485:
+     └─ DE/RE 핀 초기화 (수신 모드)
+     └─ UART 설정
+
+   [모든 보드] LoRa:
+     └─ Reset 핀 토글
+     └─ 부팅 대기 (500ms)
+     └─ 설정 명령 전송
+
+4. LTE(EC25) 초기화
+   └─ 모든 보드 공통
+```
+
+---
+
+## 🎯 핀맵 커스터마이징
+
+보드별로 핀이 다르다면 `config/board_pinmap.h`를 수정하세요:
+
+```c
+#if defined(BOARD_TYPE_PCB1)
+    #define GPS1_UART                   USART2
+    #define GPS1_UART_TX_PIN            GPIO_PIN_2
+    #define GPS1_UART_RX_PIN            GPIO_PIN_3
+    // ... 실제 하드웨어에 맞게 수정
+#endif
+```
+
+---
+
+## ⚙️ 고급 기능
+
+### 런타임 보드 정보 활용
 
 ```c
 void print_board_info(void) {
     const board_config_t* config = board_get_config();
 
-    printf("=== Board Configuration ===\n");
-    printf("Board: %s\n", config->board_name);
-    printf("GPS Count: %d\n", config->gps_count);
-    printf("Primary GPS: %s\n",
+    printf("=== Board Info ===\n");
+    printf("Name: %s\n", config->board_name);
+    printf("GPS Primary: %s\n",
         config->gps_primary == GPS_TYPE_F9P ? "F9P" : "UM982");
 
     if (config->gps_count == 2) {
-        printf("Secondary GPS: %s\n",
-            config->gps_secondary == GPS_TYPE_F9P ? "F9P" : "UM982");
+        printf("GPS Secondary: F9P\n");
     }
 
-    printf("Communication:\n");
+    printf("Interfaces:\n");
     if (config->comm_interfaces & COMM_TYPE_BLE)
         printf("  - BLE\n");
     if (config->comm_interfaces & COMM_TYPE_RS485)
@@ -194,133 +276,52 @@ void print_board_info(void) {
 }
 ```
 
----
-
-## 🎯 장점
-
-### ✅ 하나의 프로젝트
-- 모든 보드를 하나의 소스 코드로 관리
-- 코드 중복 없음
-- 유지보수 간편
-
-### ✅ 쉬운 보드 변경
-- 스크립트 한 줄: `./select_board.sh PCB2`
-- 또는 파일 한 줄 수정
-- 빌드만 다시 하면 끝!
-
-### ✅ 컴파일러 최적화
-- 사용하지 않는 코드는 자동 제거
-- 각 보드에 최적화된 바이너리 생성
-- 메모리 효율적
-
-### ✅ 안전성
-- 컴파일 타임에 검증
-- 잘못된 설정 시 빌드 에러 발생
-- 런타임 오류 없음
-
----
-
-## 🔧 다음 단계
-
-이제 각 모듈별로 구현하면 됩니다:
-
-### 1. GPS 모듈별 드라이버
-
-`lib/gps/` 또는 `modules/gps/`에 추가:
-
-- `gps_f9p.c/h` - F9P 전용 설정
-- `gps_um982.c/h` - UM982 전용 설정
-- `gps_multi.c/h` - 듀얼 GPS 관리 (PCB3용)
-
-### 2. 통신 인터페이스
-
-`modules/comm/`에 추가:
-
-- `comm_ble.c/h` - BLE 모듈 제어
-- `comm_rs485.c/h` - RS485 드라이버
-- `comm_lora.c/h` - LoRa 모듈 제어
-
-### 3. board_init_gps() 구현
-
-`Core/Src/board_config.c`의 `board_init_gps()` 함수에서:
+### 에러 처리
 
 ```c
-void board_init_gps(gps_type_t gps_type, uint8_t instance) {
-    switch(gps_type) {
-        case GPS_TYPE_F9P:
-            gps_f9p_init(instance);
-            break;
-        case GPS_TYPE_UM982:
-            gps_um982_init(instance);
-            break;
-        default:
-            break;
-    }
-}
-```
-
-### 4. board_init_comm_interfaces() 구현
-
-```c
-void board_init_comm_interfaces(void) {
+void init_with_error_check(void) {
     const board_config_t* config = board_get_config();
 
-    if (config->comm_interfaces & COMM_TYPE_BLE) {
-        comm_ble_init();
-    }
-    if (config->comm_interfaces & COMM_TYPE_RS485) {
-        comm_rs485_init();
-    }
-    if (config->comm_interfaces & COMM_TYPE_LORA) {
-        comm_lora_init();
-    }
+    // UM982는 RDY 대기 실패 가능
+    #if GPS_PRIMARY == GPS_TYPE_UM982
+        if (!um982_wait_for_ready(5000)) {
+            LOG_ERR("UM982 initialization failed!");
+            // 폴백 처리
+        }
+    #endif
 }
 ```
 
 ---
 
-## 📦 파일 구조
+## 🎉 장점
 
-```
-my_test/
-├── config/
-│   ├── board_type.h           # 현재 선택된 보드 (자동 생성 또는 수동 편집)
-│   └── FreeRTOSConfig.h
-├── Core/
-│   ├── Inc/
-│   │   └── board_config.h     # 보드 설정 API
-│   └── Src/
-│       └── board_config.c     # 보드 설정 구현
-├── select_board.sh            # 보드 선택 스크립트
-└── BOARD_CONFIG_EXAMPLE.md    # 이 문서
-```
+✅ **하나의 프로젝트** - 소스 코드 통일 관리
+✅ **쉬운 보드 변경** - 파일 한 줄 수정
+✅ **자동 최적화** - 불필요한 코드 제거
+✅ **안전한 빌드** - 잘못된 설정 시 컴파일 에러
+✅ **보드별 초기화** - GPS RDY 대기, 핀맵 자동 적용
+✅ **유지보수 편리** - 공통 코드 한 곳에서 관리
 
 ---
 
-## ❓ FAQ
+## 📌 다음 단계
 
-**Q: 보드를 바꾸려면?**
-- `./select_board.sh PCB2` 실행 후 빌드
+이제 각 모듈의 실제 드라이버를 구현하면 됩니다:
 
-**Q: 현재 선택된 보드 확인?**
-- `config/board_type.h` 파일 확인
+1. **GPS 드라이버**
+   - `gps_f9p_configure()` - F9P UBX 설정
+   - `gps_um982_configure()` - UM982 설정
 
-**Q: 여러 보드용 펌웨어를 한번에 빌드?**
-```bash
-./select_board.sh PCB1 && make && cp firmware.bin firmware_pcb1.bin
-./select_board.sh PCB2 && make && cp firmware.bin firmware_pcb2.bin
-./select_board.sh PCB3 && make && cp firmware.bin firmware_pcb3.bin
-./select_board.sh PCB4 && make && cp firmware.bin firmware_pcb4.bin
-```
+2. **통신 드라이버**
+   - `ble_init()` - BLE 모듈 초기화
+   - `rs485_init()` - RS485 드라이버
+   - `lora_init()` - LoRa 모듈 초기화
 
-**Q: 실수로 여러 보드를 동시에 정의하면?**
-- 컴파일 에러 발생: "정확히 하나의 보드 타입만 선택해야 합니다!"
+3. **기존 코드 통합**
+   - `main.c`에서 `board_init()` 호출
+   - 기존 GPS 초기화 코드를 보드별로 분리
 
 ---
 
-## 🎉 완료!
-
-이제 하나의 프로젝트로 4가지 PCB를 관리할 수 있습니다!
-
-궁금한 점이 있으면 `config/board_type.h`를 확인하거나
-이 문서를 참고하세요.
+질문이나 문제가 있으면 `config/board_type.h`를 확인하세요!
