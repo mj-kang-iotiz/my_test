@@ -1,0 +1,151 @@
+#ifndef BOARD_CONFIG_H
+#define BOARD_CONFIG_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+/**
+ * @brief 보드 타입 정의
+ * PCB1: F9P GPS + BLE + LoRa
+ * PCB2: UM982 GPS + BLE + LoRa
+ * PCB3: F9P GPS x2 + RS485 + LoRa
+ * PCB4: UM982 GPS + RS485 + LoRa
+ */
+typedef enum {
+    BOARD_TYPE_UNKNOWN = 0,
+    BOARD_TYPE_PCB1_F9P_BLE,      // F9P + BLE + LoRa
+    BOARD_TYPE_PCB2_UM982_BLE,    // UM982 + BLE + LoRa
+    BOARD_TYPE_PCB3_F9P_RS485,    // F9P x2 + RS485 + LoRa
+    BOARD_TYPE_PCB4_UM982_RS485,  // UM982 + RS485 + LoRa
+    BOARD_TYPE_MAX
+} board_type_t;
+
+/**
+ * @brief GPS 타입
+ */
+typedef enum {
+    GPS_TYPE_NONE = 0,
+    GPS_TYPE_F9P,
+    GPS_TYPE_UM982,
+} gps_type_t;
+
+/**
+ * @brief 통신 타입
+ */
+typedef enum {
+    COMM_TYPE_NONE = 0,
+    COMM_TYPE_BLE = (1 << 0),
+    COMM_TYPE_RS485 = (1 << 1),
+    COMM_TYPE_LORA = (1 << 2),
+} comm_type_t;
+
+/**
+ * @brief 보드 설정 구조체
+ */
+typedef struct {
+    board_type_t board_type;
+    gps_type_t gps_primary;       // 메인 GPS
+    gps_type_t gps_secondary;     // 서브 GPS (듀얼 GPS 보드용)
+    uint8_t gps_count;            // GPS 개수
+    uint8_t comm_interfaces;      // 통신 인터페이스 (비트마스크)
+    const char* board_name;
+} board_config_t;
+
+/* ===== 방법 1: 런타임 감지 방식 ===== */
+#ifdef BOARD_RUNTIME_DETECT
+
+/**
+ * @brief 보드 타입 자동 감지 (GPIO 핀 조합)
+ *
+ * 예: GPIO 핀 2개로 4가지 보드 구분
+ * PIN_ID0 | PIN_ID1 | Board Type
+ * --------|---------|------------
+ *    0    |    0    | PCB1 (F9P + BLE)
+ *    0    |    1    | PCB2 (UM982 + BLE)
+ *    1    |    0    | PCB3 (F9P x2 + RS485)
+ *    1    |    1    | PCB4 (UM982 + RS485)
+ *
+ * @return board_type_t 감지된 보드 타입
+ */
+board_type_t board_detect_type(void);
+
+/**
+ * @brief 보드 초기화 (런타임 감지)
+ */
+void board_init(void);
+
+#else
+/* ===== 방법 2: 컴파일 타임 방식 ===== */
+
+// 빌드 시 다음 중 하나를 정의:
+// -DBOARD_TYPE_PCB1
+// -DBOARD_TYPE_PCB2
+// -DBOARD_TYPE_PCB3
+// -DBOARD_TYPE_PCB4
+
+#if defined(BOARD_TYPE_PCB1)
+    #define CURRENT_BOARD BOARD_TYPE_PCB1_F9P_BLE
+    #define GPS_PRIMARY GPS_TYPE_F9P
+    #define GPS_SECONDARY GPS_TYPE_NONE
+    #define GPS_COUNT 1
+    #define HAS_BLE 1
+    #define HAS_RS485 0
+    #define HAS_LORA 1
+
+#elif defined(BOARD_TYPE_PCB2)
+    #define CURRENT_BOARD BOARD_TYPE_PCB2_UM982_BLE
+    #define GPS_PRIMARY GPS_TYPE_UM982
+    #define GPS_SECONDARY GPS_TYPE_NONE
+    #define GPS_COUNT 1
+    #define HAS_BLE 1
+    #define HAS_RS485 0
+    #define HAS_LORA 1
+
+#elif defined(BOARD_TYPE_PCB3)
+    #define CURRENT_BOARD BOARD_TYPE_PCB3_F9P_RS485
+    #define GPS_PRIMARY GPS_TYPE_F9P
+    #define GPS_SECONDARY GPS_TYPE_F9P
+    #define GPS_COUNT 2
+    #define HAS_BLE 0
+    #define HAS_RS485 1
+    #define HAS_LORA 1
+
+#elif defined(BOARD_TYPE_PCB4)
+    #define CURRENT_BOARD BOARD_TYPE_PCB4_UM982_RS485
+    #define GPS_PRIMARY GPS_TYPE_UM982
+    #define GPS_SECONDARY GPS_TYPE_NONE
+    #define GPS_COUNT 1
+    #define HAS_BLE 0
+    #define HAS_RS485 1
+    #define HAS_LORA 1
+
+#else
+    #error "Board type not defined! Define one of: BOARD_TYPE_PCB1, BOARD_TYPE_PCB2, BOARD_TYPE_PCB3, BOARD_TYPE_PCB4"
+#endif
+
+/**
+ * @brief 보드 초기화 (컴파일 타임)
+ */
+void board_init(void);
+
+#endif /* BOARD_RUNTIME_DETECT */
+
+/**
+ * @brief 현재 보드 설정 가져오기
+ * @return const board_config_t* 보드 설정 포인터
+ */
+const board_config_t* board_get_config(void);
+
+/**
+ * @brief GPS 타입에 따른 초기화
+ * @param gps_type GPS 타입
+ * @param instance GPS 인스턴스 (0: primary, 1: secondary)
+ */
+void board_init_gps(gps_type_t gps_type, uint8_t instance);
+
+/**
+ * @brief 통신 인터페이스 초기화
+ */
+void board_init_comm_interfaces(void);
+
+#endif /* BOARD_CONFIG_H */
