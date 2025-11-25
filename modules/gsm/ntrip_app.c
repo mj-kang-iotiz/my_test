@@ -109,10 +109,10 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     LOG_INFO("TCP 연결 성공");
 
     // ============================================================
-    // 3. TCP keep-alive 설정
+    // 3. TCP keep-alive 설정 (전역 설정, 모든 소켓에 적용)
     // ============================================================
-    LOG_INFO("TCP keep-alive 설정");
-    gsm_send_at_qicfg_keepalive(gsm, NTRIP_CONNECT_ID, 1, 60, 10, 3, NULL);
+    LOG_INFO("TCP keep-alive 설정 (전역)");
+    gsm_send_at_qicfg_keepalive(gsm, 1, 60, 10, 3, NULL);
 
     if (gsm->status.is_err || gsm->status.is_timeout) {
       LOG_WARN("TCP keep-alive 설정 실패 (무시하고 계속)");

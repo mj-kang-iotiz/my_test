@@ -520,17 +520,18 @@ void gsm_send_at_qistate(gsm_t *gsm, uint8_t query_type, uint8_t connect_id,
                          at_cmd_handler callback);
 
 /**
- * @brief AT+QICFG 전송 (TCP keep-alive 설정)
+ * @brief AT+QICFG 전송 (TCP keep-alive 전역 설정)
+ *
+ * 주의: 이 설정은 전역 설정으로 모든 소켓에 적용됨
  *
  * @param gsm GSM 핸들
- * @param connect_id 소켓 ID (0-11)
  * @param enable 1: enable, 0: disable
  * @param keepidle idle time before sending first keepalive probe (초, 기본 7200)
  * @param keepinterval interval between keepalive probes (초, 기본 75)
  * @param keepcount number of probes before closing connection (기본 9)
  * @param callback 완료 콜백 (NULL이면 동기식)
  */
-void gsm_send_at_qicfg_keepalive(gsm_t *gsm, uint8_t connect_id, uint8_t enable,
+void gsm_send_at_qicfg_keepalive(gsm_t *gsm, uint8_t enable,
                                   uint16_t keepidle, uint16_t keepinterval,
                                   uint8_t keepcount, at_cmd_handler callback);
 
