@@ -1,15 +1,11 @@
 #include "gps.h"
 #include "parser.h"
 #include <string.h>
-#include "stm32f4xx.h"
-#include "stm32f4xx_ll_usart.h"
 
 static inline void add_nmea_chksum(gps_t *gps, char ch);
 static inline uint8_t check_nmea_chksum(gps_t *gps);
 static inline void term_add(gps_t *gps, char ch);
 static inline void term_next(gps_t *gps);
-
-int gps_uart_send(const char *data, size_t len);
 
 void _gps_gga_raw_add(gps_t *gps, char ch) {
   if (gps->nmea_data.gga_raw_pos < 99) {
@@ -101,17 +97,16 @@ static inline void term_next(gps_t *gps) {
   gps->nmea.term_num++;
 }
 
-static const gps_hal_ops_t stm32_hal_ops = { .send = gps_uart_send};
 /**
  * @brief gps 객체 초기화
  *
  * @param[out] gps
  */
-void gps_init(gps_t *gps) 
-{ 
-  memset(gps, 0, sizeof(*gps)); 
+void gps_init(gps_t *gps)
+{
+  memset(gps, 0, sizeof(*gps));
   gps->mutex = xSemaphoreCreateMutex();
-  gps->ops = &stm32_hal_ops;
+  // HAL ops는 gps_port_init_instance()에서 설정됨
 }
 
 /**
@@ -189,21 +184,6 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
     }
   }
 }
-
-
-int gps_uart_send(const char *data, size_t len) {
-  for (int i = 0; i < len; i++) {
-    while (!LL_USART_IsActiveFlag_TXE(USART2))
-      ;
-    LL_USART_TransmitData8(USART2, *(data + i));
-  }
-
-  while (!LL_USART_IsActiveFlag_TC(USART2))
-    ;
-
-  return 0;
-}
-
 
 void gps_set_evt_handler(gps_t* gps, evt_handler handler)
 {
