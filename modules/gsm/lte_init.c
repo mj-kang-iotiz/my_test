@@ -411,3 +411,33 @@ static void lte_keepalive_set_callback(gsm_t *gsm, gsm_cmd_t cmd, void *msg,
   gsm_send_at_cmd(gsm, GSM_CMD_CPIN, GSM_AT_READ, NULL,
                   lte_cpin_check_callback);
 }
+
+/**
+ * @brief PDP context 비활성화 후 재초기화
+ */
+void lte_reinit_from_apn(void) {
+  LOG_WARN("========================================");
+  LOG_WARN("PDP context 비활성화 - APN부터 재설정");
+  LOG_WARN("========================================");
+
+  if (!gsm_handle_ptr) {
+    LOG_ERR("GSM 핸들이 설정되지 않음");
+    return;
+  }
+
+  // 재시도 카운터 초기화 (pdpdeact는 네트워크 이슈이므로 별도 관리)
+  lte_init_retry_count = 0;
+  lte_network_check_count = 0;
+
+  // APN 설정 단계로 이동
+  lte_init_state = LTE_INIT_APN_SET;
+
+  // APN 설정 시작
+  LOG_INFO("[재초기화] AT+CGDCONT APN 설정...");
+  gsm_pdp_context_t ctx = {
+      .cid = 1,
+      .type = GSM_PDP_TYPE_IP,
+      .apn = "internet.lguplus.co.kr"
+  };
+  gsm_send_at_cgdcont(gsm_handle_ptr, GSM_AT_WRITE, &ctx, lte_apn_set_callback);
+}

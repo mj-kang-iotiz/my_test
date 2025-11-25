@@ -55,6 +55,7 @@ typedef enum {
   GSM_EVT_TCP_CLOSED,    ///< TCP 연결 종료
   GSM_EVT_TCP_DATA_RECV, ///< TCP 데이터 수신
   GSM_EVT_TCP_SEND_OK,   ///< TCP 전송 완료
+  GSM_EVT_PDP_DEACT,     ///< PDP context 비활성화
 } gsm_evt_t;
 
 typedef void (*urc_handler_t)(gsm_t *gsm, const char *data,

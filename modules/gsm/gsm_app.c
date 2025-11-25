@@ -146,7 +146,31 @@ static void gsm_evt_handler(gsm_evt_t evt, void *args) {
 
   case GSM_EVT_INIT_FAIL: {
     LOG_ERR("애플리케이션: LTE 초기화 실패");
+    led_set_color(LED_ID_1, LED_COLOR_RED);
     // 여기서 재시도 로직 등 구현 가능
+    break;
+  }
+
+  case GSM_EVT_PDP_DEACT: {
+    uint8_t context_id = args ? *(uint8_t*)args : 0;
+    LOG_ERR("PDP context 비활성화 감지 (context_id=%d)", context_id);
+
+    // LED 노란색 (네트워크 문제)
+    led_set_color(LED_ID_1, LED_COLOR_YELLOW);
+
+    // APN부터 재초기화 (NTRIP 태스크는 TCP closed 이벤트를 받고 자동 종료됨)
+    lte_reinit_from_apn();
+    break;
+  }
+
+  case GSM_EVT_TCP_CLOSED: {
+    uint8_t connect_id = args ? *(uint8_t*)args : 0;
+    LOG_WARN("TCP 연결 종료 (connect_id=%d)", connect_id);
+
+    // NTRIP 소켓이 닫힌 경우 LED 노란색
+    if (connect_id == 0) {  // NTRIP_CONNECT_ID
+      led_set_color(LED_ID_1, LED_COLOR_YELLOW);
+    }
     break;
   }
 
