@@ -44,6 +44,12 @@ static int ntrip_connect_to_server(tcp_socket_t *sock) {
   int ret;
   int retry_count = 0;
 
+  // ★ 재연결 전 수신 큐 비우기 (오래된 데이터/NULL pbuf 제거)
+  while (tcp_available(sock) > 0) {
+    uint8_t dummy[256];
+    tcp_recv(sock, dummy, sizeof(dummy), 10);  // 10ms 타임아웃으로 빠르게 비우기
+  }
+
   while (retry_count < NTRIP_MAX_CONNECT_RETRY) {
     LOG_INFO("NTRIP 서버 연결 시도 [%d/%d]: %s:%d",
              retry_count + 1, NTRIP_MAX_CONNECT_RETRY,
