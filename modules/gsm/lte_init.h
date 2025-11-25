@@ -10,16 +10,17 @@
  */
 typedef enum {
   LTE_INIT_IDLE = 0,
-  LTE_INIT_AT_TEST,       // AT 테스트
-  LTE_INIT_ECHO_OFF,      // ATE0 에코 비활성화
-  LTE_INIT_CMEE_SET,      // AT+CMEE=2 설정
-  LTE_INIT_QISDE_OFF,     // AT+QISDE=0 소켓 데이터 에코 비활성화
-  LTE_INIT_CPIN_CHECK,    // AT+CPIN? SIM 확인
-  LTE_INIT_APN_SET,       // AT+CGDCONT APN 설정
-  LTE_INIT_APN_VERIFY,    // AT+CGDCONT? APN 확인
-  LTE_INIT_NETWORK_CHECK, // AT+COPS? 네트워크 등록 확인
-  LTE_INIT_DONE,          // 초기화 완료
-  LTE_INIT_FAILED,        // 초기화 실패
+  LTE_INIT_AT_TEST,        // AT 테스트
+  LTE_INIT_ECHO_OFF,       // ATE0 에코 비활성화
+  LTE_INIT_CMEE_SET,       // AT+CMEE=2 설정
+  LTE_INIT_QISDE_OFF,      // AT+QISDE=0 소켓 데이터 에코 비활성화
+  LTE_INIT_KEEPALIVE_SET,  // AT+QICFG keep-alive 설정
+  LTE_INIT_CPIN_CHECK,     // AT+CPIN? SIM 확인
+  LTE_INIT_APN_SET,        // AT+CGDCONT APN 설정
+  LTE_INIT_APN_VERIFY,     // AT+CGDCONT? APN 확인
+  LTE_INIT_NETWORK_CHECK,  // AT+COPS? 네트워크 등록 확인
+  LTE_INIT_DONE,           // 초기화 완료
+  LTE_INIT_FAILED,         // 초기화 실패
 } lte_init_state_t;
 
 /**

@@ -79,12 +79,15 @@ void gsm_task_create(void *arg) {
  * ============================================================================
  * 1. RDY 이벤트 수신 → lte_init_start() 호출
  * 2. AT 테스트 → lte_at_test_callback()
- * 3. AT+CMEE=2 설정 → lte_cmee_set_callback()
- * 4. AT+CPIN? SIM 확인 → lte_cpin_check_callback()
- * 5. AT+CGDCONT APN 설정 → lte_apn_set_callback()
- * 6. AT+CGDCONT? APN 확인 → lte_apn_verify_callback()
- * 7. AT+COPS? 네트워크 등록 확인 → lte_network_check_callback()
- * 8. GSM_EVT_INIT_OK 이벤트 발생
+ * 3. ATE0 에코 비활성화 → lte_echo_off_callback()
+ * 4. AT+CMEE=2 설정 → lte_cmee_set_callback()
+ * 5. AT+QISDE=0 소켓 데이터 에코 비활성화 → lte_qisde_off_callback()
+ * 6. AT+QICFG="tcp/keepalive" 전역 설정 → lte_keepalive_set_callback()
+ * 7. AT+CPIN? SIM 확인 → lte_cpin_check_callback()
+ * 8. AT+CGDCONT APN 설정 → lte_apn_set_callback()
+ * 9. AT+CGDCONT? APN 확인 → lte_apn_verify_callback()
+ * 10. AT+COPS? 네트워크 등록 확인 → lte_network_check_callback()
+ * 11. GSM_EVT_INIT_OK 이벤트 발생
  *
  * [재시도 메커니즘]
  * - 각 단계 실패 시 최대 3회 소프트웨어 재시도

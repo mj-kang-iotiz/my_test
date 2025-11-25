@@ -109,20 +109,9 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     LOG_INFO("TCP 연결 성공");
 
     // ============================================================
-    // 3. TCP keep-alive 설정 (전역 설정, 모든 소켓에 적용)
+    // 3. NTRIP HTTP 요청 전송
     // ============================================================
-    LOG_INFO("TCP keep-alive 설정 (전역)");
-    gsm_send_at_qicfg_keepalive(gsm, 1, 60, 10, 3, NULL);
-
-    if (gsm->status.is_err || gsm->status.is_timeout) {
-      LOG_WARN("TCP keep-alive 설정 실패 (무시하고 계속)");
-    } else {
-      LOG_INFO("TCP keep-alive 설정 완료");
-    }
-
-    // ============================================================
-    // 4. NTRIP HTTP 요청 전송
-    // ============================================================
+    // NOTE: TCP keep-alive는 LTE 초기화 시퀀스에서 전역 설정됨
     LOG_INFO("NTRIP HTTP 요청 전송");
     ret = tcp_send(sock, (const uint8_t *)NTRIP_HTTP_REQUEST,
                    strlen(NTRIP_HTTP_REQUEST));
@@ -167,7 +156,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     reconnect_delay = NTRIP_RECONNECT_DELAY_INITIAL;
 
     // ============================================================
-    // 5. 데이터 수신 루프
+    // 4. 데이터 수신 루프
     // ============================================================
     LOG_INFO("NTRIP 데이터 수신 시작");
     while (!ntrip_task_stop_requested) {
@@ -213,7 +202,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     }
 
     // ============================================================
-    // 6. 연결 종료 및 정리
+    // 5. 연결 종료 및 정리
     // ============================================================
     LOG_INFO("TCP 연결 종료 (재연결 준비 중)");
     if (sock) {
