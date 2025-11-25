@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// 보드 타입 설정 파일 포함
+#include "board_type.h"
+
 /**
  * @brief 보드 타입 정의
  * PCB1: F9P GPS + BLE + LoRa
@@ -51,31 +54,7 @@ typedef struct {
     const char* board_name;
 } board_config_t;
 
-/* ===== 방법 1: 런타임 감지 방식 ===== */
-#ifdef BOARD_RUNTIME_DETECT
-
-/**
- * @brief 보드 타입 자동 감지 (GPIO 핀 조합)
- *
- * 예: GPIO 핀 2개로 4가지 보드 구분
- * PIN_ID0 | PIN_ID1 | Board Type
- * --------|---------|------------
- *    0    |    0    | PCB1 (F9P + BLE)
- *    0    |    1    | PCB2 (UM982 + BLE)
- *    1    |    0    | PCB3 (F9P x2 + RS485)
- *    1    |    1    | PCB4 (UM982 + RS485)
- *
- * @return board_type_t 감지된 보드 타입
- */
-board_type_t board_detect_type(void);
-
-/**
- * @brief 보드 초기화 (런타임 감지)
- */
-void board_init(void);
-
-#else
-/* ===== 방법 2: 컴파일 타임 방식 ===== */
+/* ===== 컴파일 타임 보드 설정 ===== */
 
 // 빌드 시 다음 중 하나를 정의:
 // -DBOARD_TYPE_PCB1
@@ -124,11 +103,9 @@ void board_init(void);
 #endif
 
 /**
- * @brief 보드 초기화 (컴파일 타임)
+ * @brief 보드 초기화
  */
 void board_init(void);
-
-#endif /* BOARD_RUNTIME_DETECT */
 
 /**
  * @brief 현재 보드 설정 가져오기
