@@ -128,7 +128,7 @@ void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, gps_msg_t msg)
   switch(protocol)
   {
     case GPS_PROTOCOL_NMEA:
-      if(msg.nmea_msg == GPS_NMEA_MSG_GGA)
+      if(msg.nmea == GPS_NMEA_MSG_GGA)
       {
         if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
         {
