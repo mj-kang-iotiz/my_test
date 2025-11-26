@@ -12,7 +12,6 @@
  */
 typedef struct {
   const char* cmd;        // 전송할 명령어
-  bool wait_ack;          // ACK 대기 여부
 } gps_init_cmd_t;
 
 /**
@@ -29,18 +28,18 @@ typedef struct {
 
 // BASE UM982: 기준국 모드
 static const gps_init_cmd_t um982_base_cmds[] = {
-  {"CONFIG RESET\r\n", false},
-  {"MODE BASE TIME 60 1.5 2.5\r\n", false},
-  {"GNGGA 1\r\n", false},
-  {"SAVECONFIG\r\n", false},
+  {"CONFIG RESET\r\n"},
+  {"MODE BASE TIME 60 1.5 2.5\r\n"},
+  {"GNGGA 1\r\n"},
+  {"SAVECONFIG\r\n"},
 };
 
 // ROVER UM982: 로버 모드
 static const gps_init_cmd_t um982_rover_cmds[] = {
-  {"CONFIG RESET\r\n", false},
-  {"MODE ROVER\r\n", false},
-  {"GNGGA 1\r\n", false},
-  {"SAVECONFIG\r\n", false},
+  {"CONFIG RESET\r\n"},
+  {"MODE ROVER\r\n"},
+  {"GNGGA 1\r\n"},
+  {"SAVECONFIG\r\n"},
 };
 
 typedef struct {
@@ -65,7 +64,6 @@ typedef struct {
 
   struct {
     bool need_send_config;           // RDY 수신 후 설정 명령 전송 필요
-    uint8_t current_cmd_idx;         // 현재 전송할 명령 인덱스
     const gps_init_sequence_t* seq;  // 초기화 시퀀스
   } config;
 } gps_instance_t;
@@ -161,39 +159,30 @@ static void _add_gga_avg_data(gps_instance_t* inst, double lat, double lon, doub
 }
 
 /**
- * @brief GPS 초기화 명령 전송 (시퀀스 기반)
+ * @brief GPS 초기화 명령 전송 (모든 명령을 한번에 전송)
  */
 static void gps_send_config_commands(gps_instance_t* inst) {
   if (!inst->handle.ops || !inst->handle.ops->send) return;
   if (!inst->config.seq) {
-    // 시퀀스 없음 (F9P 등)
     inst->handle.init_state = GPS_INIT_DONE;
     return;
   }
 
-  // 현재 명령어 인덱스 확인
-  uint8_t idx = inst->config.current_cmd_idx;
-  if (idx >= inst->config.seq->cmd_count) {
-    // 모든 명령 전송 완료
-    LOG_INFO("GPS[%d] All config commands sent", inst->id);
-    inst->handle.init_state = GPS_INIT_DONE;
-    return;
+  LOG_INFO("GPS[%d] Sending all config commands (%d total)",
+           inst->id, inst->config.seq->cmd_count);
+
+  // 모든 명령을 한번에 전송
+  for (uint8_t i = 0; i < inst->config.seq->cmd_count; i++) {
+    const gps_init_cmd_t* cmd = &inst->config.seq->cmds[i];
+    LOG_INFO("GPS[%d] Cmd[%d]: %s", inst->id, i, cmd->cmd);
+    inst->handle.ops->send(cmd->cmd, strlen(cmd->cmd));
+
+    // 명령 사이 짧은 딜레이
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 
-  // 현재 명령 전송
-  const gps_init_cmd_t* cmd = &inst->config.seq->cmds[idx];
-  LOG_INFO("GPS[%d] Sending cmd[%d]: %s", inst->id, idx, cmd->cmd);
-  inst->handle.ops->send(cmd->cmd, strlen(cmd->cmd));
-
-  // ACK 대기 여부에 따라 상태 설정
-  if (cmd->wait_ack) {
-    inst->handle.init_state = GPS_INIT_WAIT_ACK;
-    LOG_DEBUG("GPS[%d] Waiting for ACK", inst->id);
-  } else {
-    // ACK 대기 안 함 -> 바로 다음 명령
-    inst->config.current_cmd_idx++;
-    inst->config.need_send_config = true;  // 다음 명령 전송 플래그
-  }
+  inst->handle.init_state = GPS_INIT_DONE;
+  LOG_INFO("GPS[%d] All commands sent, init complete", inst->id);
 }
 
 /**
@@ -215,16 +204,11 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_protocol_t protocol, uin
   switch(event)
   {
     case GPS_EVENT_READY:
-      // RDY 수신됨 → 플래그 설정 (메인 태스크에서 처리)
-      LOG_INFO("GPS[%d] RDY received", inst->id);
-      inst->config.need_send_config = true;
-      break;
-
-    case GPS_EVENT_ACK_OK:
-      // ACK 수신됨 → 다음 명령 전송
-      LOG_INFO("GPS[%d] ACK received", inst->id);
-      inst->config.current_cmd_idx++;  // 다음 명령으로 이동
-      inst->config.need_send_config = true;  // 플래그 설정
+      // RDY 수신 → 설정 명령 전송 플래그 설정
+      if (inst->config.seq != NULL) {
+        LOG_INFO("GPS[%d] RDY received, will send config commands", inst->id);
+        inst->config.need_send_config = true;
+      }
       break;
 
     case GPS_EVENT_DATA_PARSED:
@@ -380,7 +364,6 @@ void gps_init_all(void)
 
     // 초기화 시퀀스 설정
     gps_instances[i].config.seq = get_init_sequence(config->board);
-    gps_instances[i].config.current_cmd_idx = 0;
     gps_instances[i].config.need_send_config = false;
 
     // GPS 타입별 초기 상태 설정
