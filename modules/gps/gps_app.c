@@ -26,6 +26,10 @@ typedef struct {
     uint8_t len;
     bool can_read;
   } gga_avg_data;
+
+  struct {
+    bool need_send_config;  // RDY 수신 후 설정 명령 전송 필요
+  } flags;
 } gps_instance_t;
 
 static gps_instance_t gps_instances[GPS_ID_MAX] = {0};
@@ -100,9 +104,8 @@ static void gps_send_config_commands(gps_instance_t* inst) {
     // TODO: 실제 UM982 명령어로 교체 필요
     const char* cmd1 = "GNGGA 1\r\n";
     inst->handle.ops->send(cmd1, strlen(cmd1));
-    vTaskDelay(pdMS_TO_TICKS(100));
 
-    // ACK 대기 상태로 전환
+    // ACK 대기 상태로 전환 (ACK는 비동기로 수신됨)
     inst->handle.init_state = GPS_INIT_WAIT_ACK;
     LOG_INFO("GPS[%d] Waiting for UM982 ACK", inst->id);
 
@@ -132,9 +135,9 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_protocol_t protocol, uin
   switch(event)
   {
     case GPS_EVENT_READY:
-      // RDY 수신됨 → 설정 명령 전송
+      // RDY 수신됨 → 플래그 설정 (메인 태스크에서 처리)
       LOG_INFO("GPS[%d] RDY received", inst->id);
-      gps_send_config_commands(inst);
+      inst->flags.need_send_config = true;
       break;
 
     case GPS_EVENT_ACK_OK:
@@ -245,6 +248,12 @@ static void gps_process_task(void *pvParameter)
       }
     }
     xSemaphoreGive(inst->handle.mutex);
+
+    // 플래그 처리 (mutex 밖에서 실행)
+    if (inst->flags.need_send_config) {
+      gps_send_config_commands(inst);
+      inst->flags.need_send_config = false;
+    }
 
     if(get_gga(&inst->handle, my_test, &my_len))
     {
