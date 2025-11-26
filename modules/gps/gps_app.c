@@ -43,7 +43,7 @@ static const gps_init_cmd_t um982_rover_cmds[] = {
 };
 
 typedef struct {
-  gps_t handle;
+  gps_t gps;
   QueueHandle_t queue;
   TaskHandle_t task;
   gps_type_t type;
@@ -193,7 +193,7 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_protocol_t protocol, uin
   // Find which instance this GPS belongs to
   gps_instance_t* inst = NULL;
   for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
-    if (gps_instances[i].enabled && &gps_instances[i].handle == gps) {
+    if (gps_instances[i].enabled && &gps_instances[i].gps == gps) {
       inst = &gps_instances[i];
       break;
     }
@@ -357,7 +357,7 @@ void gps_init_all(void)
              type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
 
     // GPS 핸들 초기화
-    gps_init(&gps_instances[i].handle);
+    gps_init(&gps_instances[i].gps);
     gps_instances[i].type = type;
     gps_instances[i].id = (gps_id_t)i;
     gps_instances[i].enabled = true;
@@ -369,18 +369,18 @@ void gps_init_all(void)
     // GPS 타입별 초기 상태 설정
     if (type == GPS_TYPE_UM982) {
       // Unicore UM982: RDY 대기
-      gps_instances[i].handle.init_state = GPS_INIT_WAIT_READY;
+      gps_instances[i].gps.init_state = GPS_INIT_WAIT_READY;
       LOG_INFO("GPS[%d] UM982 will wait for RDY signal", i);
     } else if (type == GPS_TYPE_F9P) {
       // Ublox F9P: task에서 부팅 delay 후 완료
-      gps_instances[i].handle.init_state = GPS_INIT_WAIT_READY;  // 임시
+      gps_instances[i].gps.init_state = GPS_INIT_WAIT_READY;  // 임시
       LOG_INFO("GPS[%d] F9P will boot and init", i);
     } else {
-      gps_instances[i].handle.init_state = GPS_INIT_DONE;
+      gps_instances[i].gps.init_state = GPS_INIT_DONE;
     }
 
     // 포트 초기화 (UART 설정 및 HAL ops 자동 할당)
-    if (gps_port_init_instance(&gps_instances[i].handle, (gps_id_t)i, type) != 0) {
+    if (gps_port_init_instance(&gps_instances[i].gps, (gps_id_t)i, type) != 0) {
       LOG_ERR("GPS[%d] 포트 초기화 실패", i);
       gps_instances[i].enabled = false;
       continue;
@@ -397,7 +397,7 @@ void gps_init_all(void)
     gps_port_set_queue((gps_id_t)i, gps_instances[i].queue);
 
     // UART 시작
-    gps_port_start(&gps_instances[i].handle);
+    gps_port_start(&gps_instances[i].gps);
 
     // 태스크 생성
     char task_name[16];
@@ -442,7 +442,7 @@ gps_t* gps_get_handle(void)
   for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
     if (gps_instances[i].enabled) {
       gps_legacy_handle = &gps_instances[i];
-      return &gps_instances[i].handle;
+      return &gps_instances[i].gps;
     }
   }
 
@@ -458,7 +458,7 @@ gps_t* gps_get_instance_handle(gps_id_t id)
     return NULL;
   }
 
-  return &gps_instances[id].handle;
+  return &gps_instances[id].gps;
 }
 
 /**
