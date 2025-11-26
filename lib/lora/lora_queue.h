@@ -10,12 +10,19 @@
 // LoRa 전송 청크 설정
 // 240바이트까지 전송 가능한 경우 아래 값을 240으로 변경
 #define LORA_MAX_CHUNK_SIZE 240        // LoRa 패킷당 최대 크기 (128, 240 등)
-#define LORA_CHUNK_HEADER_SIZE 4       // 청크 헤더 크기
+#define LORA_CHUNK_HEADER_SIZE 5       // 청크 헤더 크기 (패킷 타입 추가)
 #define LORA_CHUNK_PAYLOAD_SIZE (LORA_MAX_CHUNK_SIZE - LORA_CHUNK_HEADER_SIZE)
 #define LORA_QUEUE_SIZE 10             // 큐에 저장 가능한 최대 RTCM 패킷 수
 
+// LoRa 패킷 타입
+typedef enum {
+    LORA_PACKET_TYPE_RTCM = 0x01,      // RTCM 패킷 (청킹 필요)
+    LORA_PACKET_TYPE_STATUS = 0x02,    // GPS 상태 패킷 (작은 크기, 청킹 불필요)
+} lora_packet_type_t;
+
 // LoRa 청크 헤더 구조
 typedef struct __attribute__((packed)) {
+    uint8_t packet_type;    // 패킷 타입 (RTCM, STATUS 등)
     uint8_t packet_id;      // 패킷 ID (0-255 순환)
     uint8_t chunk_index;    // 현재 청크 인덱스 (0부터 시작)
     uint8_t total_chunks;   // 총 청크 개수
@@ -29,19 +36,30 @@ typedef struct {
     uint8_t payload_len;    // 실제 페이로드 길이
 } lora_chunk_t;
 
-// RTCM 패킷 큐 항목
+// GPS fix 상태 패킷 구조 (10초마다 전송)
+typedef struct __attribute__((packed)) {
+    uint8_t fix_type;       // GPS fix 타입 (0=NO_FIX, 1=GPS, 4=RTK_FIX, 5=RTK_FLOAT)
+    uint8_t num_satellites; // 위성 개수
+    uint16_t hdop;          // HDOP * 100 (예: 1.23 → 123)
+    int32_t latitude;       // 위도 * 1e7 (도 단위)
+    int32_t longitude;      // 경도 * 1e7 (도 단위)
+    int32_t altitude;       // 고도 * 1000 (mm 단위)
+} lora_gps_status_t;
+
+// LoRa 패킷 큐 항목
 typedef struct {
-    uint8_t data[1029];     // RTCM3 최대 패킷 크기
-    uint16_t length;        // 실제 패킷 길이
-    uint8_t packet_id;      // 패킷 ID
-    uint8_t current_chunk;  // 현재 전송 중인 청크 인덱스
-    uint8_t total_chunks;   // 총 청크 개수
-    bool completed;         // 전송 완료 여부
-} lora_rtcm_packet_t;
+    lora_packet_type_t type;  // 패킷 타입
+    uint8_t data[1029];       // 패킷 데이터 (RTCM 또는 STATUS)
+    uint16_t length;          // 실제 패킷 길이
+    uint8_t packet_id;        // 패킷 ID
+    uint8_t current_chunk;    // 현재 전송 중인 청크 인덱스
+    uint8_t total_chunks;     // 총 청크 개수
+    bool completed;           // 전송 완료 여부
+} lora_packet_t;
 
 // LoRa 큐 구조체
 typedef struct {
-    lora_rtcm_packet_t packets[LORA_QUEUE_SIZE];
+    lora_packet_t packets[LORA_QUEUE_SIZE];
     uint8_t head;           // 큐 헤드 (쓰기)
     uint8_t tail;           // 큐 테일 (읽기)
     uint8_t count;          // 현재 큐에 있는 패킷 수
@@ -64,7 +82,15 @@ void lora_queue_init(lora_queue_t *queue, QueueHandle_t notify_queue);
  * @param length 패킷 길이
  * @return true: 성공, false: 큐 풀
  */
-bool lora_queue_enqueue(lora_queue_t *queue, const uint8_t *rtcm_data, uint16_t length);
+bool lora_queue_enqueue_rtcm(lora_queue_t *queue, const uint8_t *rtcm_data, uint16_t length);
+
+/**
+ * @brief GPS 상태 패킷을 큐에 추가
+ * @param queue 큐 구조체 포인터
+ * @param status GPS 상태 구조체
+ * @return true: 성공, false: 큐 풀
+ */
+bool lora_queue_enqueue_status(lora_queue_t *queue, const lora_gps_status_t *status);
 
 /**
  * @brief 다음 전송할 청크 가져오기

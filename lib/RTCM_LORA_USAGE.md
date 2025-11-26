@@ -79,6 +79,20 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
 }
 ```
 
+## LoRa 패킷 타입
+
+LoRa 큐는 두 가지 패킷 타입을 지원합니다:
+
+1. **RTCM 패킷** (`LORA_PACKET_TYPE_RTCM = 0x01`)
+   - NTRIP 서버에서 받은 RTCM3 보정 데이터
+   - 크기: 최대 1029바이트
+   - 청킹 필요
+
+2. **GPS 상태 패킷** (`LORA_PACKET_TYPE_STATUS = 0x02`)
+   - GPS fix 상태 (10초마다)
+   - 크기: 18바이트 (고정)
+   - 청킹 불필요 (1개 청크)
+
 ## LoRa 전송 시스템
 
 ### 1. 초기화 (메시지큐 방식 - 권장)
@@ -98,13 +112,47 @@ lora_notify_queue = xQueueCreate(20, sizeof(uint8_t));
 lora_queue_init(&lora_queue, lora_notify_queue);
 ```
 
-### 2. RTCM 패킷을 큐에 추가
+### 2. 패킷을 큐에 추가
 
+#### RTCM 패킷 추가
 ```c
 // RTCM 패킷을 큐에 추가 (자동으로 청킹 + 메시지큐 신호 전송)
-if (!lora_queue_enqueue(&lora_queue, rtcm_data, rtcm_len)) {
+if (!lora_queue_enqueue_rtcm(&lora_queue, rtcm_data, rtcm_len)) {
     LOG_WARN("LoRa 큐가 가득 참! 패킷 드롭됨");
 }
+```
+
+#### GPS 상태 패킷 추가 (10초마다)
+```c
+// GPS 상태 구조체 채우기
+lora_gps_status_t status;
+status.fix_type = gps->nmea_data.gga.fix;
+status.num_satellites = gps->nmea_data.gga.sats;
+status.hdop = (uint16_t)(gps->nmea_data.gga.hdop * 100);
+status.latitude = (int32_t)(gps->nmea_data.gga.lat * 1e7);
+status.longitude = (int32_t)(gps->nmea_data.gga.lon * 1e7);
+status.altitude = (int32_t)(gps->nmea_data.gga.alt * 1000);
+
+// LoRa 큐에 추가
+if (!lora_queue_enqueue_status(&lora_queue, &status)) {
+    LOG_WARN("GPS 상태 패킷 드롭");
+}
+```
+
+#### 10초 타이머 설정
+```c
+// FreeRTOS 타이머로 10초마다 GPS 상태 전송
+#include "timers.h"
+
+void gps_status_timer_callback(TimerHandle_t xTimer) {
+    gps_t *gps = (gps_t *)pvTimerGetTimerID(xTimer);
+    // GPS 상태를 LoRa 큐에 추가
+    send_gps_status_to_lora(gps);
+}
+
+// 타이머 생성 및 시작
+TimerHandle_t timer = xTimerCreate("gps_status", pdMS_TO_TICKS(10000), pdTRUE, gps, gps_status_timer_callback);
+xTimerStart(timer, 0);
 ```
 
 ### 3. LoRa 전송 태스크 (메시지큐 방식)
@@ -146,7 +194,7 @@ void lora_transmit_task(void *pvParameter) {
 - RTCM 패킷 수신 즉시 전송 시작
 - 블로킹 방식으로 전력 효율적
 
-### 4. LoRa 수신 및 재조립 (Rover 측)
+### 4. LoRa 수신 및 패킷 처리 (Rover 측)
 
 ```c
 typedef struct {
@@ -160,36 +208,57 @@ typedef struct {
 rtcm_reassembly_t reassembly[256];  // Packet ID별 버퍼
 
 void lora_receive_handler(uint8_t *data, uint8_t len) {
+    if (len < LORA_CHUNK_HEADER_SIZE) return;
+
     // 헤더 파싱
-    uint8_t packet_id = data[0];
-    uint8_t chunk_index = data[1];
-    uint8_t total_chunks = data[2];
+    uint8_t packet_type = data[0];
+    uint8_t packet_id = data[1];
+    uint8_t chunk_index = data[2];
+    uint8_t total_chunks = data[3];
+    uint8_t *payload = &data[LORA_CHUNK_HEADER_SIZE];
     uint8_t payload_len = len - LORA_CHUNK_HEADER_SIZE;
 
-    // 재조립 버퍼에 청크 저장
-    rtcm_reassembly_t *reasm = &reassembly[packet_id];
+    if (packet_type == LORA_PACKET_TYPE_RTCM) {
+        // RTCM 패킷 재조립
+        rtcm_reassembly_t *reasm = &reassembly[packet_id];
 
-    if (chunk_index == 0) {
-        // 첫 청크: 초기화
-        memset(reasm, 0, sizeof(rtcm_reassembly_t));
-        reasm->total_chunks = total_chunks;
-    }
+        if (chunk_index == 0) {
+            // 첫 청크: 초기화
+            memset(reasm, 0, sizeof(rtcm_reassembly_t));
+            reasm->total_chunks = total_chunks;
+        }
 
-    // 페이로드 복사
-    uint16_t offset = chunk_index * LORA_CHUNK_PAYLOAD_SIZE;
-    memcpy(&reasm->buffer[offset], &data[LORA_CHUNK_HEADER_SIZE], payload_len);
-    reasm->length += payload_len;
-    reasm->received_chunks++;
+        // 페이로드 복사
+        uint16_t offset = chunk_index * LORA_CHUNK_PAYLOAD_SIZE;
+        memcpy(&reasm->buffer[offset], payload, payload_len);
+        reasm->length += payload_len;
+        reasm->received_chunks++;
 
-    // 모든 청크 수신 완료?
-    if (reasm->received_chunks >= reasm->total_chunks) {
-        // RTCM 패킷 재조립 완료!
-        LOG_INFO("RTCM Packet %d 재조립 완료 (%d bytes)", packet_id, reasm->length);
+        // 모든 청크 수신 완료?
+        if (reasm->received_chunks >= reasm->total_chunks) {
+            LOG_INFO("RTCM Packet %d 재조립 완료 (%d bytes)", packet_id, reasm->length);
 
-        // GPS로 전송
-        gps_send_rtcm(reasm->buffer, reasm->length);
+            // GPS로 전송
+            gps_send_rtcm(reasm->buffer, reasm->length);
+            reasm->complete = true;
+        }
 
-        reasm->complete = true;
+    } else if (packet_type == LORA_PACKET_TYPE_STATUS) {
+        // GPS 상태 패킷 (청킹 없음)
+        lora_gps_status_t status;
+        memcpy(&status, payload, sizeof(lora_gps_status_t));
+
+        // 역변환
+        double lat = status.latitude / 1e7;
+        double lon = status.longitude / 1e7;
+        double alt = status.altitude / 1000.0;
+        double hdop = status.hdop / 100.0;
+
+        LOG_INFO("GPS 상태 수신: fix=%d, sats=%d, HDOP=%.2f",
+                 status.fix_type, status.num_satellites, hdop);
+        LOG_INFO("  위치: %.7f, %.7f, %.3fm", lat, lon, alt);
+
+        // UI 업데이트 등...
     }
 }
 ```
@@ -199,17 +268,34 @@ void lora_receive_handler(uint8_t *data, uint8_t len) {
 ### LoRa 청크 구조
 
 ```
-┌──────────────┬──────────────┬──────────────┬──────────────┬─────────────────┐
-│ Packet ID    │ Chunk Index  │ Total Chunks │ Reserved     │ Payload         │
-│ (1 byte)     │ (1 byte)     │ (1 byte)     │ (1 byte)     │ (0-236 bytes)   │
-└──────────────┴──────────────┴──────────────┴──────────────┴─────────────────┘
+┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────────────┐
+│ Packet Type  │ Packet ID    │ Chunk Index  │ Total Chunks │ Reserved     │ Payload         │
+│ (1 byte)     │ (1 byte)     │ (1 byte)     │ (1 byte)     │ (1 byte)     │ (0-235 bytes)   │
+└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴─────────────────┘
 ```
 
+- **Packet Type**: 패킷 타입 (0x01=RTCM, 0x02=STATUS)
 - **Packet ID**: 0-255 순환, 패킷 구분용
 - **Chunk Index**: 현재 청크 인덱스 (0부터 시작)
 - **Total Chunks**: 전체 청크 개수
 - **Reserved**: 예약됨 (추후 확장용)
-- **Payload**: 실제 RTCM 데이터 (최대 236바이트)
+- **Payload**: 실제 데이터 (최대 235바이트)
+
+### GPS 상태 패킷 구조 (18바이트)
+
+```
+┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┐
+│ Fix Type     │ Satellites   │ HDOP         │ Latitude     │ Longitude    │ Altitude     │
+│ (1 byte)     │ (1 byte)     │ (2 bytes)    │ (4 bytes)    │ (4 bytes)    │ (4 bytes)    │
+└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┘
+```
+
+- **Fix Type**: 0=NO_FIX, 1=GPS, 4=RTK_FIX, 5=RTK_FLOAT
+- **Satellites**: 위성 개수
+- **HDOP**: HDOP * 100 (예: 1.23 → 123)
+- **Latitude**: 위도 * 1e7 (도 단위, int32)
+- **Longitude**: 경도 * 1e7 (도 단위, int32)
+- **Altitude**: 고도 * 1000 (mm 단위, int32)
 
 ### 청크 크기 설정
 

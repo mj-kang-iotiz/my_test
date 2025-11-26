@@ -86,7 +86,7 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
 
         if (rtcm_data) {
             // ✅ LoRa 큐에 추가 (자동으로 메시지큐 신호 전송)
-            if (!lora_queue_enqueue(&g_lora_queue, rtcm_data, rtcm_len)) {
+            if (!lora_queue_enqueue_rtcm(&g_lora_queue, rtcm_data, rtcm_len)) {
                 LOG_WARN("LoRa 큐 풀! 패킷 드롭 (메시지 타입: %d)",
                          rtcm_get_message_type(rtcm_data));
             } else {

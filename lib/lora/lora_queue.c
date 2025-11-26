@@ -26,7 +26,7 @@ static uint8_t calculate_chunks(uint16_t packet_length) {
 /**
  * @brief RTCM 패킷을 큐에 추가
  */
-bool lora_queue_enqueue(lora_queue_t *queue, const uint8_t *rtcm_data, uint16_t length) {
+bool lora_queue_enqueue_rtcm(lora_queue_t *queue, const uint8_t *rtcm_data, uint16_t length) {
     if (!queue || !rtcm_data || length == 0 || length > 1029) {
         return false;
     }
@@ -38,12 +38,50 @@ bool lora_queue_enqueue(lora_queue_t *queue, const uint8_t *rtcm_data, uint16_t 
     }
 
     // 새 패킷 추가
-    lora_rtcm_packet_t *pkt = &queue->packets[queue->head];
+    lora_packet_t *pkt = &queue->packets[queue->head];
+    pkt->type = LORA_PACKET_TYPE_RTCM;
     memcpy(pkt->data, rtcm_data, length);
     pkt->length = length;
     pkt->packet_id = queue->next_packet_id++;
     pkt->current_chunk = 0;
     pkt->total_chunks = calculate_chunks(length);
+    pkt->completed = false;
+
+    // 큐 헤드 이동
+    queue->head = (queue->head + 1) % LORA_QUEUE_SIZE;
+    queue->count++;
+
+    // 전송 태스크에 신호 전송 (메시지큐 설정된 경우)
+    if (queue->notify_queue) {
+        uint8_t notify_msg = 1;
+        xQueueSend(queue->notify_queue, &notify_msg, 0);  // 논블로킹
+    }
+
+    return true;
+}
+
+/**
+ * @brief GPS 상태 패킷을 큐에 추가
+ */
+bool lora_queue_enqueue_status(lora_queue_t *queue, const lora_gps_status_t *status) {
+    if (!queue || !status) {
+        return false;
+    }
+
+    // 큐가 가득 찬 경우
+    if (lora_queue_is_full(queue)) {
+        queue->dropped_count++;
+        return false;
+    }
+
+    // 새 패킷 추가
+    lora_packet_t *pkt = &queue->packets[queue->head];
+    pkt->type = LORA_PACKET_TYPE_STATUS;
+    memcpy(pkt->data, status, sizeof(lora_gps_status_t));
+    pkt->length = sizeof(lora_gps_status_t);
+    pkt->packet_id = queue->next_packet_id++;
+    pkt->current_chunk = 0;
+    pkt->total_chunks = 1;  // STATUS 패킷은 항상 1개 청크 (작은 크기)
     pkt->completed = false;
 
     // 큐 헤드 이동
@@ -70,7 +108,7 @@ bool lora_queue_get_next_chunk(lora_queue_t *queue, lora_chunk_t *chunk) {
         return false;
     }
 
-    lora_rtcm_packet_t *pkt = &queue->packets[queue->tail];
+    lora_packet_t *pkt = &queue->packets[queue->tail];
 
     // 이미 전송 완료된 패킷
     if (pkt->completed) {
@@ -79,6 +117,7 @@ bool lora_queue_get_next_chunk(lora_queue_t *queue, lora_chunk_t *chunk) {
     }
 
     // 청크 헤더 설정
+    chunk->header.packet_type = pkt->type;
     chunk->header.packet_id = pkt->packet_id;
     chunk->header.chunk_index = pkt->current_chunk;
     chunk->header.total_chunks = pkt->total_chunks;
@@ -145,13 +184,14 @@ void lora_chunk_serialize(const lora_chunk_t *chunk, uint8_t *out_buffer, uint8_
     if (!chunk || !out_buffer || !out_len) return;
 
     // 헤더 복사
-    out_buffer[0] = chunk->header.packet_id;
-    out_buffer[1] = chunk->header.chunk_index;
-    out_buffer[2] = chunk->header.total_chunks;
-    out_buffer[3] = chunk->header.reserved;
+    out_buffer[0] = chunk->header.packet_type;
+    out_buffer[1] = chunk->header.packet_id;
+    out_buffer[2] = chunk->header.chunk_index;
+    out_buffer[3] = chunk->header.total_chunks;
+    out_buffer[4] = chunk->header.reserved;
 
     // 페이로드 복사
-    memcpy(&out_buffer[4], chunk->payload, chunk->payload_len);
+    memcpy(&out_buffer[5], chunk->payload, chunk->payload_len);
 
     *out_len = LORA_CHUNK_HEADER_SIZE + chunk->payload_len;
 }
