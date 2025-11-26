@@ -29,18 +29,18 @@ typedef struct {
 
 // BASE UM982: 기준국 모드
 static const gps_init_cmd_t um982_base_cmds[] = {
-  {"CONFIG RESET\r\n", true},
-  {"MODE BASE TIME 60 1.5 2.5\r\n", true},
-  {"GNGGA 1\r\n", true},
-  {"SAVECONFIG\r\n", true},
+  {"CONFIG RESET\r\n", false},
+  {"MODE BASE TIME 60 1.5 2.5\r\n", false},
+  {"GNGGA 1\r\n", false},
+  {"SAVECONFIG\r\n", false},
 };
 
 // ROVER UM982: 로버 모드
 static const gps_init_cmd_t um982_rover_cmds[] = {
-  {"CONFIG RESET\r\n", true},
-  {"MODE ROVER\r\n", true},
-  {"GNGGA 1\r\n", true},
-  {"SAVECONFIG\r\n", true},
+  {"CONFIG RESET\r\n", false},
+  {"MODE ROVER\r\n", false},
+  {"GNGGA 1\r\n", false},
+  {"SAVECONFIG\r\n", false},
 };
 
 typedef struct {
