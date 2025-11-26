@@ -23,49 +23,17 @@ static char gps_recv_buf[GPS_ID_MAX][2048];
 static QueueHandle_t gps_queues[GPS_ID_MAX] = {NULL};
 
 // ============================================================================
-// GPS HAL ops (내부에서만 사용, extern 불필요)
+// GPS 타입 저장 (UART별)
 // ============================================================================
-
-// USART2용 송신 함수
-static int gps_uart2_send(const char *data, size_t len) {
-  for (size_t i = 0; i < len; i++) {
-    while (!LL_USART_IsActiveFlag_TXE(USART2));
-    LL_USART_TransmitData8(USART2, data[i]);
-  }
-  return len;
-}
-
-static const gps_hal_ops_t gps_uart2_ops = {
-  .init = NULL,
-  .reset = NULL,
-  .send = gps_uart2_send,
-  .recv = NULL,
-};
-
-// UART4용 송신 함수
-static int gps_uart4_send(const char *data, size_t len) {
-  for (size_t i = 0; i < len; i++) {
-    while (!LL_USART_IsActiveFlag_TXE(UART4));
-    LL_USART_TransmitData8(UART4, data[i]);
-  }
-  return len;
-}
-
-static const gps_hal_ops_t gps_uart4_ops = {
-  .init = NULL,
-  .reset = NULL,
-  .send = gps_uart4_send,
-  .recv = NULL,
-};
+static gps_type_t uart2_gps_type = GPS_TYPE_F9P;
+static gps_type_t uart4_gps_type = GPS_TYPE_F9P;
 
 // ============================================================================
-// UART 초기화 함수들
+// GPS HAL ops 함수들
 // ============================================================================
 
-/**
- * @brief USART2 초기화 (Base 또는 Rover Ublox 첫 번째)
- */
-static void init_uart2_for_gps(gps_type_t type) {
+// USART2 초기화
+static int gps_uart2_init(void) {
   LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
   LL_USART_InitTypeDef USART_InitStruct = {0};
 
@@ -105,7 +73,7 @@ static void init_uart2_for_gps(gps_type_t type) {
   NVIC_EnableIRQ(USART2_IRQn);
 
   // UART 설정 (GPS 타입별 보드레이트)
-  USART_InitStruct.BaudRate = (type == GPS_TYPE_F9P) ? 115200 : 38400;
+  USART_InitStruct.BaudRate = (uart2_gps_type == GPS_TYPE_F9P) ? 115200 : 38400;
   USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
   USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
   USART_InitStruct.Parity = LL_USART_PARITY_NONE;
@@ -117,12 +85,27 @@ static void init_uart2_for_gps(gps_type_t type) {
   LL_USART_Enable(USART2);
 
   LOG_INFO("USART2 초기화 완료 (보드레이트: %d)", USART_InitStruct.BaudRate);
+  return 0;
 }
 
-/**
- * @brief UART4 초기화 (Rover Unicore 또는 Rover Ublox 두 번째)
- */
-static void init_uart4_for_gps(gps_type_t type) {
+// USART2용 송신 함수
+static int gps_uart2_send(const char *data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    while (!LL_USART_IsActiveFlag_TXE(USART2));
+    LL_USART_TransmitData8(USART2, data[i]);
+  }
+  return len;
+}
+
+static const gps_hal_ops_t gps_uart2_ops = {
+  .init = gps_uart2_init,
+  .reset = NULL,
+  .send = gps_uart2_send,
+  .recv = NULL,
+};
+
+// UART4 초기화
+static int gps_uart4_init(void) {
   LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
   LL_USART_InitTypeDef USART_InitStruct = {0};
 
@@ -161,7 +144,7 @@ static void init_uart4_for_gps(gps_type_t type) {
   NVIC_EnableIRQ(UART4_IRQn);
 
   // UART 설정
-  USART_InitStruct.BaudRate = (type == GPS_TYPE_F9P) ? 115200 : 38400;
+  USART_InitStruct.BaudRate = (uart4_gps_type == GPS_TYPE_F9P) ? 115200 : 38400;
   USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
   USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
   USART_InitStruct.Parity = LL_USART_PARITY_NONE;
@@ -173,7 +156,24 @@ static void init_uart4_for_gps(gps_type_t type) {
   LL_USART_Enable(UART4);
 
   LOG_INFO("UART4 초기화 완료 (보드레이트: %d)", USART_InitStruct.BaudRate);
+  return 0;
 }
+
+// UART4용 송신 함수
+static int gps_uart4_send(const char *data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    while (!LL_USART_IsActiveFlag_TXE(UART4));
+    LL_USART_TransmitData8(UART4, data[i]);
+  }
+  return len;
+}
+
+static const gps_hal_ops_t gps_uart4_ops = {
+  .init = gps_uart4_init,
+  .reset = NULL,
+  .send = gps_uart4_send,
+  .recv = NULL,
+};
 
 // ============================================================================
 // ✅ 핵심 함수: GPS 인스턴스 초기화 (board_config 기반)
@@ -192,26 +192,38 @@ int gps_port_init_instance(gps_t* gps_handle, gps_id_t id, gps_type_t type) {
   if (config->board == BOARD_TYPE_BASE_UM982 ||
       config->board == BOARD_TYPE_BASE_F9P) {
     // Base 보드: 항상 USART2
-    init_uart2_for_gps(type);
+    uart2_gps_type = type;
     gps_handle->ops = &gps_uart2_ops;
-    LOG_INFO("GPS[%d] USART2 할당", id);
+    if (gps_handle->ops->init) {
+      gps_handle->ops->init();
+    }
+    LOG_INFO("GPS[%d] USART2 할당 및 초기화 완료", id);
 
   } else if (config->board == BOARD_TYPE_ROVER_UM982) {
     // Rover Unicore: UART4
-    init_uart4_for_gps(type);
+    uart4_gps_type = type;
     gps_handle->ops = &gps_uart4_ops;
-    LOG_INFO("GPS[%d] UART4 할당", id);
+    if (gps_handle->ops->init) {
+      gps_handle->ops->init();
+    }
+    LOG_INFO("GPS[%d] UART4 할당 및 초기화 완료", id);
 
   } else if (config->board == BOARD_TYPE_ROVER_F9P) {
     // Rover Ublox: 첫 번째는 USART2, 두 번째는 UART4
     if (id == GPS_ID_BASE) {
-      init_uart2_for_gps(type);
+      uart2_gps_type = type;
       gps_handle->ops = &gps_uart2_ops;
-      LOG_INFO("GPS[%d] USART2 할당 (Rover F9P 첫 번째)", id);
+      if (gps_handle->ops->init) {
+        gps_handle->ops->init();
+      }
+      LOG_INFO("GPS[%d] USART2 할당 및 초기화 완료 (Rover F9P 첫 번째)", id);
     } else if (id == GPS_ID_ROVER) {
-      init_uart4_for_gps(type);
+      uart4_gps_type = type;
       gps_handle->ops = &gps_uart4_ops;
-      LOG_INFO("GPS[%d] UART4 할당 (Rover F9P 두 번째)", id);
+      if (gps_handle->ops->init) {
+        gps_handle->ops->init();
+      }
+      LOG_INFO("GPS[%d] UART4 할당 및 초기화 완료 (Rover F9P 두 번째)", id);
     }
   }
 
