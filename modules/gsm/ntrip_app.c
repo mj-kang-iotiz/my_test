@@ -35,6 +35,17 @@ static const char NTRIP_HTTP_REQUEST[] =
 
 uint8_t recv_buf[1500];
 
+// NTRIP 소켓 전역 포인터 (GGA 전송용)
+static tcp_socket_t *g_ntrip_socket = NULL;
+
+/**
+ * @brief NTRIP 소켓 포인터 가져오기 (GGA 전송용)
+ * @return NTRIP 소켓 포인터 (NULL: 연결 안됨)
+ */
+tcp_socket_t* ntrip_get_socket(void) {
+  return g_ntrip_socket;
+}
+
 static int ntrip_connect_to_server(tcp_socket_t *sock) {
   int ret;
   int retry_count = 0;
@@ -116,9 +127,13 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     return;
   }
   LOG_INFO("TCP 소켓 생성 완료");
+
+  // 전역 소켓 포인터 설정 (GPS에서 GGA 전송용)
+  g_ntrip_socket = sock;
   
   if (ntrip_connect_to_server(sock) != 0) {
     LOG_ERR("초기 연결 실패");
+    g_ntrip_socket = NULL;
     tcp_socket_destroy(sock);
     vTaskDelete(NULL);
     return;
@@ -132,6 +147,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
                  strlen(NTRIP_HTTP_REQUEST));
   if (ret < 0) {
     LOG_ERR("HTTP 요청 전송 실패: %d", ret);
+    g_ntrip_socket = NULL;
     tcp_close(sock);
     tcp_socket_destroy(sock);
     vTaskDelete(NULL);
@@ -236,6 +252,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
 
   // 연결 종료
   LOG_INFO("TCP 연결 종료");
+  g_ntrip_socket = NULL;
   tcp_close(sock);
   tcp_socket_destroy(sock);
 

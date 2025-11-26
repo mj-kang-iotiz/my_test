@@ -4,6 +4,8 @@
 #include "led.h"
 #include <string.h>
 #include "board_config.h"
+#include "ntrip_app.h"
+#include "tcp_socket.h"
 
 #define GPS_UART_MAX_RECV_SIZE 2048
 
@@ -299,6 +301,23 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
         if(gps->nmea_data.gga.fix >= GPS_FIX_GPS)
         {
           _add_gga_avg_data(inst, gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
+        }
+
+        // ✅ NTRIP 소켓으로 GGA 전송 (1초마다 자동)
+        tcp_socket_t* ntrip_sock = ntrip_get_socket();
+        if (ntrip_sock) {
+          char gga_buf[100];
+          uint8_t gga_len = 0;
+
+          if (get_gga(gps, gga_buf, &gga_len)) {
+            int send_ret = tcp_send(ntrip_sock, (const uint8_t*)gga_buf, gga_len);
+
+            if (send_ret > 0) {
+              LOG_DEBUG("GGA→NTRIP (%d bytes): %.*s", send_ret, gga_len - 2, gga_buf);
+            } else {
+              LOG_WARN("GGA 전송 실패: %d", send_ret);
+            }
+          }
         }
       }
       break;
