@@ -37,13 +37,18 @@ uint8_t recv_buf[1500];
 
 // NTRIP 소켓 전역 포인터 (GGA 전송용)
 static tcp_socket_t *g_ntrip_socket = NULL;
+static bool g_ntrip_ready = false;  // 데이터 송신 가능 여부 (연결 완료 플래그)
 
 /**
  * @brief NTRIP 소켓 포인터 가져오기 (GGA 전송용)
- * @return NTRIP 소켓 포인터 (NULL: 연결 안됨)
+ * @return NTRIP 소켓 포인터 (NULL: 연결 안됨 또는 준비 안됨)
  */
 tcp_socket_t* ntrip_get_socket(void) {
-  return g_ntrip_socket;
+  // 소켓이 있고, 연결이 완료되어 데이터 송신 가능한 경우에만 반환
+  if (g_ntrip_socket && g_ntrip_ready) {
+    return g_ntrip_socket;
+  }
+  return NULL;
 }
 
 static int ntrip_connect_to_server(tcp_socket_t *sock) {
@@ -134,6 +139,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
   if (ntrip_connect_to_server(sock) != 0) {
     LOG_ERR("초기 연결 실패");
     g_ntrip_socket = NULL;
+    g_ntrip_ready = false;
     tcp_socket_destroy(sock);
     vTaskDelete(NULL);
     return;
@@ -148,6 +154,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
   if (ret < 0) {
     LOG_ERR("HTTP 요청 전송 실패: %d", ret);
     g_ntrip_socket = NULL;
+    g_ntrip_ready = false;
     tcp_close(sock);
     tcp_socket_destroy(sock);
     vTaskDelete(NULL);
@@ -159,6 +166,10 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
   // ICY 200 OK\r\n\r\n 수신
   ret = tcp_recv(sock, recv_buf, sizeof(recv_buf), 0);
   led_set_color(1, LED_COLOR_GREEN);
+
+  // ✅ 연결 완료! 이제 GGA 전송 가능
+  g_ntrip_ready = true;
+  LOG_INFO("NTRIP 연결 완료 - GGA 전송 시작");
 
   // 무한 루프: 데이터 수신
   while (1) {
@@ -207,6 +218,10 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
       if (timeout_count >= NTRIP_MAX_TIMEOUT_COUNT) {
         LOG_WARN("연속 타임아웃 발생 또는 소켓 끊김, 재연결 시도...");
         led_set_color(1, LED_COLOR_YELLOW);
+
+        // ❌ GGA 전송 중단
+        g_ntrip_ready = false;
+
         // 기존 연결 닫기
         tcp_close_force(sock);
         vTaskDelay(pdMS_TO_TICKS(NTRIP_RECONNECT_DELAY_MS));
@@ -222,6 +237,9 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
           LOG_INFO("재연결 성공");
           led_set_color(1, LED_COLOR_GREEN);
           timeout_count = 0;  // 타임아웃 카운터 리셋
+
+          // ✅ GGA 전송 재개
+          g_ntrip_ready = true;
         }
       }
     } else {
@@ -235,6 +253,10 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
       // 에러 발생 시 재연결 시도
       LOG_WARN("에러 발생, 재연결 시도...");
       led_set_color(1, LED_COLOR_YELLOW);
+
+      // ❌ GGA 전송 중단
+      g_ntrip_ready = false;
+
       tcp_close_force(sock);
       vTaskDelay(pdMS_TO_TICKS(NTRIP_RECONNECT_DELAY_MS));
 
@@ -246,6 +268,9 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
         LOG_INFO("재연결 성공");
         timeout_count = 0;
         led_set_color(1, LED_COLOR_GREEN);
+
+        // ✅ GGA 전송 재개
+        g_ntrip_ready = true;
       }
     }
   }
@@ -253,6 +278,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
   // 연결 종료
   LOG_INFO("TCP 연결 종료");
   g_ntrip_socket = NULL;
+  g_ntrip_ready = false;
   tcp_close(sock);
   tcp_socket_destroy(sock);
 
