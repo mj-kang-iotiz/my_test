@@ -103,10 +103,11 @@ static inline void term_next(gps_t *gps) {
  *
  * @param[out] gps
  */
-void gps_init(gps_t *gps) 
-{ 
-  memset(gps, 0, sizeof(*gps)); 
+void gps_init(gps_t *gps)
+{
+  memset(gps, 0, sizeof(*gps));
   gps->mutex = xSemaphoreCreateMutex();
+  rtcm_parser_init(&gps->rtcm);
 }
 
 /**
@@ -180,6 +181,27 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
 
         gps->protocol = GPS_PROTOCOL_UBX;
         gps->state = GPS_PARSE_STATE_UBX_SYNC_2;
+      } else if (*d == RTCM3_PREAMBLE) {
+        // RTCM 패킷 시작 (0xD3)
+        gps->protocol = GPS_PROTOCOL_RTCM;
+        gps->state = GPS_PARSE_STATE_RTCM_PARSING;
+
+        // RTCM 파서에 첫 바이트 전달
+        if (rtcm_parse_byte(&gps->rtcm, *d)) {
+          // 패킷 완성 (거의 불가능하지만 체크)
+          const uint8_t *packet_data = NULL;
+          uint16_t packet_len = 0;
+          rtcm_get_packet(&gps->rtcm, &packet_data, &packet_len);
+
+          if (packet_data && gps->handler) {
+            gps_msg_t msg = {0};
+            gps->handler(gps, GPS_EVENT_RTCM_PACKET, GPS_PROTOCOL_RTCM, msg);
+          }
+
+          rtcm_parser_reset(&gps->rtcm);
+          gps->protocol = GPS_PROTOCOL_NONE;
+          gps->state = GPS_PARSE_STATE_NONE;
+        }
       } else {
         gps->state = GPS_PARSE_STATE_NONE;
       }
@@ -228,6 +250,24 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
     } else if (gps->protocol == GPS_PROTOCOL_UBX) {
       add_payload(gps, *d);
       gps_parse_ubx(gps);
+    } else if (gps->protocol == GPS_PROTOCOL_RTCM) {
+      // RTCM 바이트 단위 파싱
+      if (rtcm_parse_byte(&gps->rtcm, *d)) {
+        // RTCM 패킷 파싱 완료
+        const uint8_t *packet_data = NULL;
+        uint16_t packet_len = 0;
+        rtcm_get_packet(&gps->rtcm, &packet_data, &packet_len);
+
+        if (packet_data && gps->handler) {
+          gps_msg_t msg = {0};
+          gps->handler(gps, GPS_EVENT_RTCM_PACKET, GPS_PROTOCOL_RTCM, msg);
+        }
+
+        // 다음 패킷을 위해 리셋
+        rtcm_parser_reset(&gps->rtcm);
+        gps->protocol = GPS_PROTOCOL_NONE;
+        gps->state = GPS_PARSE_STATE_NONE;
+      }
     }
   }
 }
