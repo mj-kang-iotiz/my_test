@@ -414,7 +414,7 @@ void gps_init_all(void)
     gps_port_set_queue((gps_id_t)i, gps_instances[i].queue);
 
     // UART 시작
-    gps_port_start((gps_id_t)i);
+    gps_port_start(&gps_instances[i].handle);
 
     // 태스크 생성
     char task_name[16];

@@ -17,6 +17,8 @@
 
 typedef struct {
   int (*init)(void);
+  int (*start)(void);
+  int (*stop)(void);
   int (*reset)(void);
   int (*send)(const char *data, size_t len);
   int (*recv)(char *buf, size_t len);

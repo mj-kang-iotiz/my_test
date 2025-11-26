@@ -19,9 +19,16 @@ int gps_port_init_instance(gps_t* gps_handle, gps_id_t id, gps_type_t type);
 /**
  * @brief GPS 통신 시작
  *
- * @param id GPS ID
+ * @param gps_handle GPS 핸들 포인터
  */
-void gps_port_start(gps_id_t id);
+void gps_port_start(gps_t* gps_handle);
+
+/**
+ * @brief GPS 통신 정지
+ *
+ * @param gps_handle GPS 핸들 포인터
+ */
+void gps_port_stop(gps_t* gps_handle);
 
 /**
  * @brief GPS 데이터 수신 위치 가져오기
