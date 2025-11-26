@@ -25,12 +25,22 @@ typedef struct {
 typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, uint8_t msg);
 
 /**
+ * @brief GPS 초기화 상태
+ */
+typedef enum {
+  GPS_INIT_WAIT_READY = 0,   // RDY 대기
+  GPS_INIT_WAIT_ACK,          // ACK 대기
+  GPS_INIT_DONE               // 초기화 완료
+} gps_init_state_t;
+
+/**
  * @brief GPS 구조체
  *
  */
 typedef struct gps_s {
   /* state */
   gps_procotol_t protocol;
+  gps_init_state_t init_state;  // 초기화 상태
 
   /* os variable */
   SemaphoreHandle_t mutex;

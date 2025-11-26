@@ -7,21 +7,13 @@
 
 #define GGA_AVG_SIZE 100
 
-// GPS 초기화 상태
-typedef enum {
-  GPS_INIT_STATE_WAIT_READY,    // UM982: RDY 대기
-  GPS_INIT_STATE_SEND_CONFIG,   // 설정 명령 전송 중
-  GPS_INIT_STATE_WAIT_ACK,      // 설정 응답 대기
-  GPS_INIT_STATE_READY          // 정상 동작 중
-} gps_init_state_t;
-
 typedef struct {
   gps_t handle;
   QueueHandle_t queue;
   TaskHandle_t task;
   gps_type_t type;
+  gps_id_t id;
   bool enabled;
-  gps_init_state_t init_state;
 
   struct {
     double lat[GGA_AVG_SIZE];
@@ -99,80 +91,32 @@ static void _add_gga_avg_data(gps_instance_t* inst, double lat, double lon, doub
 /**
  * @brief GPS 타입별 설정 명령 전송
  */
-static void gps_send_config_commands(gps_instance_t* inst, gps_id_t id) {
+static void gps_send_config_commands(gps_instance_t* inst) {
   if (!inst->handle.ops || !inst->handle.ops->send) return;
 
   if (inst->type == GPS_TYPE_UM982) {
-    // Unicore UM982 설정 명령
-    LOG_INFO("GPS[%d] Sending UM982 config commands", id);
+    LOG_INFO("GPS[%d] Sending UM982 config commands", inst->id);
 
     // TODO: 실제 UM982 명령어로 교체 필요
-    // 예: "CONFIG xxx" 또는 "GNGGA 1" 등
-    const char* cmd1 = "GNGGA 1\r\n";  // GGA 메시지 1초 간격 출력
+    const char* cmd1 = "GNGGA 1\r\n";
     inst->handle.ops->send(cmd1, strlen(cmd1));
-
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // 추가 설정 명령이 필요하면 여기에
-
     // ACK 대기 상태로 전환
-    inst->init_state = GPS_INIT_STATE_WAIT_ACK;
-    LOG_INFO("GPS[%d] Waiting for UM982 ACK", id);
+    inst->handle.init_state = GPS_INIT_WAIT_ACK;
+    LOG_INFO("GPS[%d] Waiting for UM982 ACK", inst->id);
 
   } else if (inst->type == GPS_TYPE_F9P) {
-    // Ublox F9P 설정 명령
-    LOG_INFO("GPS[%d] Sending F9P config commands", id);
-
-    // F9P는 보통 기본 설정으로 동작하거나 UBX 명령 사용
-    // 필요시 $PUBX 또는 UBX 바이너리 명령 추가
-
-    // F9P는 설정 없이 바로 동작 (또는 ACK 대기)
-    inst->init_state = GPS_INIT_STATE_READY;
-    LOG_INFO("GPS[%d] F9P ready (no ACK needed)", id);
+    LOG_INFO("GPS[%d] F9P config (no ACK needed)", inst->id);
+    // F9P는 설정 없이 바로 동작
+    inst->handle.init_state = GPS_INIT_DONE;
   }
 }
 
 /**
- * @brief 수신 데이터에서 "RDY" 문자열 검색
+ * @brief GPS 이벤트 핸들러
  */
-static bool check_for_rdy(const char* data, size_t len) {
-  if (len < 3) return false;
-
-  for (size_t i = 0; i <= len - 3; i++) {
-    if (data[i] == 'R' && data[i+1] == 'D' && data[i+2] == 'Y') {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * @brief 수신 데이터에서 "OK" 응답 검색 (UM982)
- */
-static bool check_for_ok(const char* data, size_t len) {
-  if (len < 2) return false;
-
-  for (size_t i = 0; i <= len - 2; i++) {
-    if (data[i] == 'O' && data[i+1] == 'K') {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * @brief F9P ACK 확인 (간단 버전 - UBX-ACK 또는 즉시 OK)
- */
-static bool check_f9p_ack(const char* data, size_t len) {
-  // F9P는 설정 없이 바로 동작하거나, UBX-ACK 확인 필요
-  // 간단하게 일정 시간 후 OK로 간주
-  // TODO: 실제 UBX-ACK-ACK (0xB5 0x62 0x05 0x01) 파싱 필요
-  (void)data;
-  (void)len;
-  return true;  // 임시: 바로 OK
-}
-
-void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, uint8_t msg)
+void gps_evt_handler(gps_t* gps, gps_procotol_t event, uint8_t msg)
 {
   // Find which instance this GPS belongs to
   gps_instance_t* inst = NULL;
@@ -185,8 +129,19 @@ void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, uint8_t msg)
 
   if (!inst) return;
 
-  switch(protocol)
+  switch(event)
   {
+    case GPS_EVENT_READY:
+      // RDY 수신됨 → 설정 명령 전송
+      LOG_INFO("GPS[%d] RDY received", inst->id);
+      gps_send_config_commands(inst);
+      break;
+
+    case GPS_EVENT_ACK_OK:
+      // ACK 수신됨 → 초기화 완료
+      LOG_INFO("GPS[%d] ACK received, init complete", inst->id);
+      break;
+
     case GPS_PROTOCOL_NMEA:
       if(msg == GPS_NMEA_MSG_GGA)
       {
@@ -195,6 +150,9 @@ void gps_evt_handler(gps_t* gps, gps_procotol_t protocol, uint8_t msg)
           _add_gga_avg_data(inst, gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
         }
       }
+      break;
+
+    default:
       break;
   }
 }
@@ -218,10 +176,11 @@ static void gps_process_task(void *pvParameter)
   led_set_color(led_id, LED_COLOR_RED);
   led_set_state(led_id, true);
 
-  // F9P는 부팅 대기 후 바로 설정 전송
-  if (inst->type == GPS_TYPE_F9P && inst->init_state == GPS_INIT_STATE_SEND_CONFIG) {
+  // F9P는 부팅 대기 후 바로 초기화 완료
+  if (inst->type == GPS_TYPE_F9P) {
     vTaskDelay(pdMS_TO_TICKS(500));  // F9P 부팅 대기
-    gps_send_config_commands(inst, id);
+    inst->handle.init_state = GPS_INIT_DONE;
+    LOG_INFO("GPS[%d] F9P init complete", id);
   }
 
   while (1) {
@@ -250,7 +209,7 @@ static void gps_process_task(void *pvParameter)
     xSemaphoreTake(inst->handle.mutex, portMAX_DELAY);
     pos = gps_port_get_rx_pos(id);
     char* gps_recv = gps_port_get_recv_buf(id);
-    size_t gps_recv_size = 2048;  // From gps_port.c buffer size
+    size_t gps_recv_size = 2048;
 
     if (pos != old_pos) {
       if (pos > old_pos) {
@@ -259,31 +218,8 @@ static void gps_process_task(void *pvParameter)
         LOG_DEBUG("GPS[%d] RX: %u bytes", id, len);
         LOG_DEBUG_RAW("RAW: ", &gps_recv[old_pos], len);
 
-        // 초기화 상태별 처리
-        if (inst->init_state == GPS_INIT_STATE_WAIT_READY) {
-          // UM982: RDY 대기 중
-          if (check_for_rdy(&gps_recv[old_pos], len)) {
-            LOG_INFO("GPS[%d] RDY received, sending configuration", id);
-            gps_send_config_commands(inst, id);  // 내부에서 WAIT_ACK로 변경
-          }
-        } else if (inst->init_state == GPS_INIT_STATE_WAIT_ACK) {
-          // 설정 명령 ACK 대기 중
-          bool ack_received = false;
-
-          if (inst->type == GPS_TYPE_UM982) {
-            ack_received = check_for_ok(&gps_recv[old_pos], len);
-          } else if (inst->type == GPS_TYPE_F9P) {
-            ack_received = check_f9p_ack(&gps_recv[old_pos], len);
-          }
-
-          if (ack_received) {
-            LOG_INFO("GPS[%d] ACK received, configuration complete", id);
-            inst->init_state = GPS_INIT_STATE_READY;
-          }
-        } else if (inst->init_state == GPS_INIT_STATE_READY) {
-          // 정상 동작: 데이터 파싱
-          gps_parse_process(&inst->handle, &gps_recv[old_pos], pos - old_pos);
-        }
+        // 파싱 (RDY/ACK는 gps_parse_process에서 자동 감지)
+        gps_parse_process(&inst->handle, &gps_recv[old_pos], pos - old_pos);
 
       } else {
         size_t len1 = gps_recv_size - old_pos;
@@ -293,37 +229,11 @@ static void gps_process_task(void *pvParameter)
 
         LOG_DEBUG_RAW("RAW: ", &gps_recv[old_pos], len1);
 
-        // 초기화 상태별 처리 (버퍼 랩어라운드)
-        if (inst->init_state == GPS_INIT_STATE_WAIT_READY) {
-          // UM982: RDY 대기 중
-          if (check_for_rdy(&gps_recv[old_pos], len1) ||
-              (pos > 0 && check_for_rdy(gps_recv, len2))) {
-            LOG_INFO("GPS[%d] RDY received, sending configuration", id);
-            gps_send_config_commands(inst, id);  // 내부에서 WAIT_ACK로 변경
-          }
-        } else if (inst->init_state == GPS_INIT_STATE_WAIT_ACK) {
-          // 설정 명령 ACK 대기 중
-          bool ack_received = false;
-
-          if (inst->type == GPS_TYPE_UM982) {
-            ack_received = check_for_ok(&gps_recv[old_pos], len1) ||
-                          (pos > 0 && check_for_ok(gps_recv, len2));
-          } else if (inst->type == GPS_TYPE_F9P) {
-            ack_received = check_f9p_ack(&gps_recv[old_pos], len1);
-          }
-
-          if (ack_received) {
-            LOG_INFO("GPS[%d] ACK received, configuration complete", id);
-            inst->init_state = GPS_INIT_STATE_READY;
-          }
-        } else if (inst->init_state == GPS_INIT_STATE_READY) {
-          // 정상 동작: 데이터 파싱
-          gps_parse_process(&inst->handle, &gps_recv[old_pos],
-                            gps_recv_size - old_pos);
-          if (pos > 0) {
-            LOG_DEBUG_RAW("RAW: ", gps_recv, len2);
-            gps_parse_process(&inst->handle, gps_recv, pos);
-          }
+        // 파싱 (버퍼 랩어라운드)
+        gps_parse_process(&inst->handle, &gps_recv[old_pos], gps_recv_size - old_pos);
+        if (pos > 0) {
+          LOG_DEBUG_RAW("RAW: ", gps_recv, len2);
+          gps_parse_process(&inst->handle, gps_recv, pos);
         }
       }
       old_pos = pos;
@@ -371,19 +281,20 @@ void gps_init_all(void)
     // GPS 핸들 초기화
     gps_init(&gps_instances[i].handle);
     gps_instances[i].type = type;
+    gps_instances[i].id = (gps_id_t)i;
     gps_instances[i].enabled = true;
 
     // GPS 타입별 초기 상태 설정
     if (type == GPS_TYPE_UM982) {
       // Unicore UM982: RDY 대기
-      gps_instances[i].init_state = GPS_INIT_STATE_WAIT_READY;
+      gps_instances[i].handle.init_state = GPS_INIT_WAIT_READY;
       LOG_INFO("GPS[%d] UM982 will wait for RDY signal", i);
     } else if (type == GPS_TYPE_F9P) {
-      // Ublox F9P: 바로 설정 전송 (또는 바로 READY)
-      gps_instances[i].init_state = GPS_INIT_STATE_SEND_CONFIG;
-      LOG_INFO("GPS[%d] F9P will send config immediately", i);
+      // Ublox F9P: task에서 부팅 delay 후 완료
+      gps_instances[i].handle.init_state = GPS_INIT_WAIT_READY;  // 임시
+      LOG_INFO("GPS[%d] F9P will boot and init", i);
     } else {
-      gps_instances[i].init_state = GPS_INIT_STATE_READY;
+      gps_instances[i].handle.init_state = GPS_INIT_DONE;
     }
 
     // 포트 초기화 (UART 설정 및 HAL ops 자동 할당)
