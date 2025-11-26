@@ -15,6 +15,9 @@
 
 #define GPS_PAYLOAD_SIZE 256
 
+// Forward declaration
+typedef struct gps_s gps_t;
+
 typedef struct {
   int (*init)(void);
   int (*start)(void);
@@ -39,7 +42,7 @@ typedef enum {
  * @brief GPS 구조체
  *
  */
-typedef struct gps_s {
+struct gps_s {
   /* state */
   gps_protocol_t protocol;
   gps_init_state_t init_state;  // 초기화 상태
@@ -65,7 +68,7 @@ typedef struct gps_s {
 
   /* evt handler */
   evt_handler handler;
-} gps_t;
+};
 
 void gps_init(gps_t *gps);
 void gps_parse_process(gps_t *gps, const void *data, size_t len);
