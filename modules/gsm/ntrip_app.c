@@ -145,26 +145,8 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     return;
   }
 
+  // ntrip_connect_to_server()에서 이미 HTTP + ICY 200 OK 완료
   gsm_socket_monitor_start();
-
-  // HTTP 요청 전송 (한 번만)
-  LOG_INFO("NTRIP HTTP 요청 전송");
-  ret = tcp_send(sock, (const uint8_t *)NTRIP_HTTP_REQUEST,
-                 strlen(NTRIP_HTTP_REQUEST));
-  if (ret < 0) {
-    LOG_ERR("HTTP 요청 전송 실패: %d", ret);
-    g_ntrip_socket = NULL;
-    g_ntrip_ready = false;
-    tcp_close(sock);
-    tcp_socket_destroy(sock);
-    vTaskDelete(NULL);
-    return;
-  }
-
-  LOG_INFO("HTTP 요청 전송 완료 (%d bytes)", ret);
-
-  // ICY 200 OK\r\n\r\n 수신
-  ret = tcp_recv(sock, recv_buf, sizeof(recv_buf), 0);
   led_set_color(1, LED_COLOR_GREEN);
 
   // ✅ 연결 완료! 이제 GGA 전송 가능
