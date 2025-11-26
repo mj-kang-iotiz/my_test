@@ -264,8 +264,7 @@ static void gps_process_task(void *pvParameter)
           // UM982: RDY 대기 중
           if (check_for_rdy(&gps_recv[old_pos], len)) {
             LOG_INFO("GPS[%d] RDY received, sending configuration", id);
-            inst->init_state = GPS_INIT_STATE_SEND_CONFIG;
-            gps_send_config_commands(inst, id);
+            gps_send_config_commands(inst, id);  // 내부에서 WAIT_ACK로 변경
           }
         } else if (inst->init_state == GPS_INIT_STATE_WAIT_ACK) {
           // 설정 명령 ACK 대기 중
@@ -300,8 +299,7 @@ static void gps_process_task(void *pvParameter)
           if (check_for_rdy(&gps_recv[old_pos], len1) ||
               (pos > 0 && check_for_rdy(gps_recv, len2))) {
             LOG_INFO("GPS[%d] RDY received, sending configuration", id);
-            inst->init_state = GPS_INIT_STATE_SEND_CONFIG;
-            gps_send_config_commands(inst, id);
+            gps_send_config_commands(inst, id);  // 내부에서 WAIT_ACK로 변경
           }
         } else if (inst->init_state == GPS_INIT_STATE_WAIT_ACK) {
           // 설정 명령 ACK 대기 중
