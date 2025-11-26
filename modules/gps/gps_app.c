@@ -116,7 +116,7 @@ static void gps_send_config_commands(gps_instance_t* inst) {
 /**
  * @brief GPS 이벤트 핸들러
  */
-void gps_evt_handler(gps_t* gps, gps_procotol_t event, uint8_t msg)
+void gps_evt_handler(gps_t* gps, gps_event_t event, gps_protocol_t protocol, uint8_t msg)
 {
   // Find which instance this GPS belongs to
   gps_instance_t* inst = NULL;
@@ -142,12 +142,15 @@ void gps_evt_handler(gps_t* gps, gps_procotol_t event, uint8_t msg)
       LOG_INFO("GPS[%d] ACK received, init complete", inst->id);
       break;
 
-    case GPS_PROTOCOL_NMEA:
-      if(msg == GPS_NMEA_MSG_GGA)
-      {
-        if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
+    case GPS_EVENT_DATA_PARSED:
+      // 프로토콜 데이터 파싱 완료
+      if (protocol == GPS_PROTOCOL_NMEA) {
+        if(msg == GPS_NMEA_MSG_GGA)
         {
-          _add_gga_avg_data(inst, gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
+          if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
+          {
+            _add_gga_avg_data(inst, gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
+          }
         }
       }
       break;

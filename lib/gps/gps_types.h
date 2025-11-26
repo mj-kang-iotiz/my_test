@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /**
- * @brief 처리중인 GPS 프로토콜 종류 및 이벤트
+ * @brief GPS 프로토콜 종류
  *
  */
 typedef enum {
@@ -13,13 +13,26 @@ typedef enum {
   GPS_PROTOCOL_UBX = 2,
   GPS_PROTOCOL_UNICORE = 3,
 
-  /* 초기화 이벤트 (100번대) */
-  GPS_EVENT_READY = 100,      // RDY 수신
-  GPS_EVENT_ACK_OK = 101,     // ACK 수신 성공
-  GPS_EVENT_ACK_FAIL = 102,   // ACK 수신 실패
-
   GPS_PROTOCOL_INVALID = UINT8_MAX
-} gps_procotol_t;
+} gps_protocol_t;
+
+/**
+ * @brief GPS 이벤트 타입
+ *
+ */
+typedef enum {
+  GPS_EVENT_NONE = 0,
+
+  /* Unicore 초기화 이벤트 */
+  GPS_EVENT_READY,        // RDY 수신 (Unicore)
+  GPS_EVENT_ACK_OK,       // ACK 수신 성공 (Unicore)
+  GPS_EVENT_ACK_FAIL,     // ACK 수신 실패 (Unicore)
+
+  /* 공통 데이터 이벤트 */
+  GPS_EVENT_DATA_PARSED,  // 프로토콜 데이터 파싱 완료
+
+  GPS_EVENT_INVALID = UINT8_MAX
+} gps_event_t;
 
 /**
  * @brief GPS 파싱 상태

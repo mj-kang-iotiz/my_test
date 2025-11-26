@@ -22,7 +22,7 @@ typedef struct {
   int (*recv)(char *buf, size_t len);
 } gps_hal_ops_t;
 
-typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, uint8_t msg);
+typedef void (*evt_handler)(gps_t* gps, gps_event_t event, gps_protocol_t protocol, uint8_t msg);
 
 /**
  * @brief GPS 초기화 상태
@@ -39,7 +39,7 @@ typedef enum {
  */
 typedef struct gps_s {
   /* state */
-  gps_procotol_t protocol;
+  gps_protocol_t protocol;
   gps_init_state_t init_state;  // 초기화 상태
 
   /* os variable */
