@@ -7,6 +7,42 @@
 
 #define GGA_AVG_SIZE 100
 
+/**
+ * @brief GPS 초기화 명령어 구조체
+ */
+typedef struct {
+  const char* cmd;        // 전송할 명령어
+  bool wait_ack;          // ACK 대기 여부
+} gps_init_cmd_t;
+
+/**
+ * @brief GPS 초기화 시퀀스
+ */
+typedef struct {
+  const gps_init_cmd_t* cmds;
+  uint8_t cmd_count;
+} gps_init_sequence_t;
+
+// ============================================================================
+// 보드별 초기화 명령어 테이블
+// ============================================================================
+
+// BASE UM982: 기준국 모드
+static const gps_init_cmd_t um982_base_cmds[] = {
+  {"CONFIG RESET\r\n", true},
+  {"MODE BASE TIME 60 1.5 2.5\r\n", true},
+  {"GNGGA 1\r\n", true},
+  {"SAVECONFIG\r\n", true},
+};
+
+// ROVER UM982: 로버 모드
+static const gps_init_cmd_t um982_rover_cmds[] = {
+  {"CONFIG RESET\r\n", true},
+  {"MODE ROVER\r\n", true},
+  {"GNGGA 1\r\n", true},
+  {"SAVECONFIG\r\n", true},
+};
+
 typedef struct {
   gps_t handle;
   QueueHandle_t queue;
@@ -26,6 +62,12 @@ typedef struct {
     uint8_t len;
     bool can_read;
   } gga_avg_data;
+
+  struct {
+    bool need_send_config;           // RDY 수신 후 설정 명령 전송 필요
+    uint8_t current_cmd_idx;         // 현재 전송할 명령 인덱스
+    const gps_init_sequence_t* seq;  // 초기화 시퀀스
+  } config;
 } gps_instance_t;
 
 static gps_instance_t gps_instances[GPS_ID_MAX] = {0};
@@ -35,6 +77,36 @@ static gps_instance_t* gps_legacy_handle = NULL;
 
 char my_test[100];
 uint8_t my_len = 0;
+
+/**
+ * @brief 보드별 초기화 시퀀스 가져오기
+ */
+static const gps_init_sequence_t* get_init_sequence(board_type_t board) {
+  static const gps_init_sequence_t um982_base_seq = {
+    .cmds = um982_base_cmds,
+    .cmd_count = sizeof(um982_base_cmds) / sizeof(um982_base_cmds[0])
+  };
+
+  static const gps_init_sequence_t um982_rover_seq = {
+    .cmds = um982_rover_cmds,
+    .cmd_count = sizeof(um982_rover_cmds) / sizeof(um982_rover_cmds[0])
+  };
+
+  switch(board) {
+    case BOARD_TYPE_BASE_UM982:
+      return &um982_base_seq;
+
+    case BOARD_TYPE_ROVER_UM982:
+      return &um982_rover_seq;
+
+    case BOARD_TYPE_BASE_F9P:
+    case BOARD_TYPE_ROVER_F9P:
+      return NULL;  // F9P는 별도 초기화 없음
+
+    default:
+      return NULL;
+  }
+}
 
 static void _add_gga_avg_data(gps_instance_t* inst, double lat, double lon, double alt)
 {
@@ -89,34 +161,45 @@ static void _add_gga_avg_data(gps_instance_t* inst, double lat, double lon, doub
 }
 
 /**
- * @brief GPS 타입별 설정 명령 전송
+ * @brief GPS 초기화 명령 전송 (시퀀스 기반)
  */
 static void gps_send_config_commands(gps_instance_t* inst) {
   if (!inst->handle.ops || !inst->handle.ops->send) return;
-
-  if (inst->type == GPS_TYPE_UM982) {
-    LOG_INFO("GPS[%d] Sending UM982 config commands", inst->id);
-
-    // TODO: 실제 UM982 명령어로 교체 필요
-    const char* cmd1 = "GNGGA 1\r\n";
-    inst->handle.ops->send(cmd1, strlen(cmd1));
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // ACK 대기 상태로 전환
-    inst->handle.init_state = GPS_INIT_WAIT_ACK;
-    LOG_INFO("GPS[%d] Waiting for UM982 ACK", inst->id);
-
-  } else if (inst->type == GPS_TYPE_F9P) {
-    LOG_INFO("GPS[%d] F9P config (no ACK needed)", inst->id);
-    // F9P는 설정 없이 바로 동작
+  if (!inst->config.seq) {
+    // 시퀀스 없음 (F9P 등)
     inst->handle.init_state = GPS_INIT_DONE;
+    return;
+  }
+
+  // 현재 명령어 인덱스 확인
+  uint8_t idx = inst->config.current_cmd_idx;
+  if (idx >= inst->config.seq->cmd_count) {
+    // 모든 명령 전송 완료
+    LOG_INFO("GPS[%d] All config commands sent", inst->id);
+    inst->handle.init_state = GPS_INIT_DONE;
+    return;
+  }
+
+  // 현재 명령 전송
+  const gps_init_cmd_t* cmd = &inst->config.seq->cmds[idx];
+  LOG_INFO("GPS[%d] Sending cmd[%d]: %s", inst->id, idx, cmd->cmd);
+  inst->handle.ops->send(cmd->cmd, strlen(cmd->cmd));
+
+  // ACK 대기 여부에 따라 상태 설정
+  if (cmd->wait_ack) {
+    inst->handle.init_state = GPS_INIT_WAIT_ACK;
+    LOG_DEBUG("GPS[%d] Waiting for ACK", inst->id);
+  } else {
+    // ACK 대기 안 함 -> 바로 다음 명령
+    inst->config.current_cmd_idx++;
+    inst->config.need_send_config = true;  // 다음 명령 전송 플래그
   }
 }
 
 /**
  * @brief GPS 이벤트 핸들러
  */
-void gps_evt_handler(gps_t* gps, gps_procotol_t event, uint8_t msg)
+void gps_evt_handler(gps_t* gps, gps_event_t event, gps_protocol_t protocol, uint8_t msg)
 {
   // Find which instance this GPS belongs to
   gps_instance_t* inst = NULL;
@@ -132,22 +215,27 @@ void gps_evt_handler(gps_t* gps, gps_procotol_t event, uint8_t msg)
   switch(event)
   {
     case GPS_EVENT_READY:
-      // RDY 수신됨 → 설정 명령 전송
+      // RDY 수신됨 → 플래그 설정 (메인 태스크에서 처리)
       LOG_INFO("GPS[%d] RDY received", inst->id);
-      gps_send_config_commands(inst);
+      inst->config.need_send_config = true;
       break;
 
     case GPS_EVENT_ACK_OK:
-      // ACK 수신됨 → 초기화 완료
-      LOG_INFO("GPS[%d] ACK received, init complete", inst->id);
+      // ACK 수신됨 → 다음 명령 전송
+      LOG_INFO("GPS[%d] ACK received", inst->id);
+      inst->config.current_cmd_idx++;  // 다음 명령으로 이동
+      inst->config.need_send_config = true;  // 플래그 설정
       break;
 
-    case GPS_PROTOCOL_NMEA:
-      if(msg == GPS_NMEA_MSG_GGA)
-      {
-        if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
+    case GPS_EVENT_DATA_PARSED:
+      // 프로토콜 데이터 파싱 완료
+      if (protocol == GPS_PROTOCOL_NMEA) {
+        if(msg == GPS_NMEA_MSG_GGA)
         {
-          _add_gga_avg_data(inst, gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
+          if(gps->nmea_data.gga.fix == GPS_FIX_GPS)
+          {
+            _add_gga_avg_data(inst, gps->nmea_data.gga.lat, gps->nmea_data.gga.lon, gps->nmea_data.gga.alt);
+          }
         }
       }
       break;
@@ -243,6 +331,12 @@ static void gps_process_task(void *pvParameter)
     }
     xSemaphoreGive(inst->handle.mutex);
 
+    // 플래그 처리 (mutex 밖에서 실행)
+    if (inst->config.need_send_config) {
+      gps_send_config_commands(inst);
+      inst->config.need_send_config = false;
+    }
+
     if(get_gga(&inst->handle, my_test, &my_len))
     {
       LOG_ERR("GPS[%d] GGA: %s", id, my_test);
@@ -283,6 +377,11 @@ void gps_init_all(void)
     gps_instances[i].type = type;
     gps_instances[i].id = (gps_id_t)i;
     gps_instances[i].enabled = true;
+
+    // 초기화 시퀀스 설정
+    gps_instances[i].config.seq = get_init_sequence(config->board);
+    gps_instances[i].config.current_cmd_idx = 0;
+    gps_instances[i].config.need_send_config = false;
 
     // GPS 타입별 초기 상태 설정
     if (type == GPS_TYPE_UM982) {

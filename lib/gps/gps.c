@@ -150,7 +150,7 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
     if (check_for_rdy(d, len)) {
       gps->init_state = GPS_INIT_DONE;  // 일단 완료로 (ACK 필요 시 상위에서 변경)
       if (gps->handler) {
-        gps->handler(gps, GPS_EVENT_READY, 0);
+        gps->handler(gps, GPS_EVENT_READY, GPS_PROTOCOL_UNICORE, 0);
       }
     }
     return;  // RDY 대기 중에는 파싱하지 않음
@@ -161,7 +161,7 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
     if (check_for_ok(d, len)) {
       gps->init_state = GPS_INIT_DONE;
       if (gps->handler) {
-        gps->handler(gps, GPS_EVENT_ACK_OK, 0);
+        gps->handler(gps, GPS_EVENT_ACK_OK, GPS_PROTOCOL_UNICORE, 0);
       }
     }
     return;  // ACK 대기 중에는 파싱하지 않음
@@ -218,6 +218,11 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
             _gps_gga_raw_add(gps, *d);
             _gps_gga_raw_add(gps, '\n');
             gps->nmea_data.gga_is_rdy = true;
+        }
+
+        // NMEA 파싱 완료 이벤트 전달
+        if (gps->handler) {
+          gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_NMEA, gps->nmea.msg_type);
         }
 
         gps->protocol = GPS_PROTOCOL_NONE;
