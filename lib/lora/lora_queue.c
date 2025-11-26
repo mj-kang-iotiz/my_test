@@ -4,7 +4,7 @@
 /**
  * @brief LoRa 큐 초기화
  */
-void lora_queue_init(lora_queue_t *queue) {
+void lora_queue_init(lora_queue_t *queue, QueueHandle_t notify_queue) {
     if (!queue) return;
 
     memset(queue, 0, sizeof(lora_queue_t));
@@ -13,6 +13,7 @@ void lora_queue_init(lora_queue_t *queue) {
     queue->count = 0;
     queue->next_packet_id = 0;
     queue->dropped_count = 0;
+    queue->notify_queue = notify_queue;
 }
 
 /**
@@ -48,6 +49,12 @@ bool lora_queue_enqueue(lora_queue_t *queue, const uint8_t *rtcm_data, uint16_t 
     // 큐 헤드 이동
     queue->head = (queue->head + 1) % LORA_QUEUE_SIZE;
     queue->count++;
+
+    // 전송 태스크에 신호 전송 (메시지큐 설정된 경우)
+    if (queue->notify_queue) {
+        uint8_t notify_msg = 1;
+        xQueueSend(queue->notify_queue, &notify_msg, 0);  // 논블로킹
+    }
 
     return true;
 }

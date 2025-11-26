@@ -4,9 +4,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "FreeRTOS.h"
+#include "queue.h"
 
 // LoRa 전송 청크 설정
-#define LORA_MAX_CHUNK_SIZE 128        // LoRa 패킷당 최대 크기 (조정 가능)
+// 240바이트까지 전송 가능한 경우 아래 값을 240으로 변경
+#define LORA_MAX_CHUNK_SIZE 240        // LoRa 패킷당 최대 크기 (128, 240 등)
 #define LORA_CHUNK_HEADER_SIZE 4       // 청크 헤더 크기
 #define LORA_CHUNK_PAYLOAD_SIZE (LORA_MAX_CHUNK_SIZE - LORA_CHUNK_HEADER_SIZE)
 #define LORA_QUEUE_SIZE 10             // 큐에 저장 가능한 최대 RTCM 패킷 수
@@ -44,13 +47,15 @@ typedef struct {
     uint8_t count;          // 현재 큐에 있는 패킷 수
     uint8_t next_packet_id; // 다음 패킷 ID (0-255 순환)
     uint32_t dropped_count; // 큐 풀로 드롭된 패킷 수
+    QueueHandle_t notify_queue;  // 전송 태스크 알림용 메시지큐
 } lora_queue_t;
 
 /**
  * @brief LoRa 큐 초기화
  * @param queue 큐 구조체 포인터
+ * @param notify_queue 전송 태스크 알림용 FreeRTOS 메시지큐 (NULL이면 폴링 모드)
  */
-void lora_queue_init(lora_queue_t *queue);
+void lora_queue_init(lora_queue_t *queue, QueueHandle_t notify_queue);
 
 /**
  * @brief RTCM 패킷을 큐에 추가

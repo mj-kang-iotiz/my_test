@@ -81,53 +81,70 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
 
 ## LoRa 전송 시스템
 
-### 1. 큐 초기화
+### 1. 초기화 (메시지큐 방식 - 권장)
 
 ```c
 #include "lora_queue.h"
+#include "FreeRTOS.h"
+#include "queue.h"
 
 lora_queue_t lora_queue;
-lora_queue_init(&lora_queue);
+QueueHandle_t lora_notify_queue;
+
+// 메시지큐 생성
+lora_notify_queue = xQueueCreate(20, sizeof(uint8_t));
+
+// LoRa 큐 초기화 (메시지큐 연결)
+lora_queue_init(&lora_queue, lora_notify_queue);
 ```
 
 ### 2. RTCM 패킷을 큐에 추가
 
 ```c
-// RTCM 패킷을 큐에 추가 (자동으로 청킹됨)
+// RTCM 패킷을 큐에 추가 (자동으로 청킹 + 메시지큐 신호 전송)
 if (!lora_queue_enqueue(&lora_queue, rtcm_data, rtcm_len)) {
     LOG_WARN("LoRa 큐가 가득 참! 패킷 드롭됨");
 }
 ```
 
-### 3. LoRa 전송 루프
+### 3. LoRa 전송 태스크 (메시지큐 방식)
 
 ```c
-void lora_transmit_task(void) {
+void lora_transmit_task(void *pvParameter) {
     lora_chunk_t chunk;
     uint8_t tx_buffer[LORA_MAX_CHUNK_SIZE];
     uint8_t tx_len;
+    uint8_t notify_msg;
 
     while (1) {
-        // 큐에서 다음 청크 가져오기
-        if (lora_queue_get_next_chunk(&lora_queue, &chunk)) {
-            // 청크를 바이트 배열로 직렬화
-            lora_chunk_serialize(&chunk, tx_buffer, &tx_len);
+        // ✅ 메시지큐 대기 (블로킹 방식, 효율적!)
+        if (xQueueReceive(lora_notify_queue, &notify_msg, portMAX_DELAY)) {
+            // RTCM 패킷이 큐에 추가됨! 모든 청크 전송
+            while (lora_queue_get_next_chunk(&lora_queue, &chunk)) {
+                // 청크를 바이트 배열로 직렬화
+                lora_chunk_serialize(&chunk, tx_buffer, &tx_len);
 
-            // LoRa로 전송
-            lora_send(tx_buffer, tx_len);
+                // LoRa로 전송
+                lora_hal_send(tx_buffer, tx_len);
 
-            LOG_INFO("LoRa TX: Packet %d, Chunk %d/%d (%d bytes)",
-                     chunk.header.packet_id,
-                     chunk.header.chunk_index + 1,
-                     chunk.header.total_chunks,
-                     tx_len);
-        } else {
-            // 큐가 비어있음, 대기
-            vTaskDelay(pdMS_TO_TICKS(10));
+                LOG_INFO("LoRa TX: Packet %d, Chunk %d/%d (%d bytes)",
+                         chunk.header.packet_id,
+                         chunk.header.chunk_index + 1,
+                         chunk.header.total_chunks,
+                         tx_len);
+
+                // 청크 간 간격 (LoRa 속도에 맞춰 조정)
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
         }
     }
 }
 ```
+
+**장점:**
+- 불필요한 폴링 제거 (CPU 절약)
+- RTCM 패킷 수신 즉시 전송 시작
+- 블로킹 방식으로 전력 효율적
 
 ### 4. LoRa 수신 및 재조립 (Rover 측)
 
@@ -184,7 +201,7 @@ void lora_receive_handler(uint8_t *data, uint8_t len) {
 ```
 ┌──────────────┬──────────────┬──────────────┬──────────────┬─────────────────┐
 │ Packet ID    │ Chunk Index  │ Total Chunks │ Reserved     │ Payload         │
-│ (1 byte)     │ (1 byte)     │ (1 byte)     │ (1 byte)     │ (0-124 bytes)   │
+│ (1 byte)     │ (1 byte)     │ (1 byte)     │ (1 byte)     │ (0-236 bytes)   │
 └──────────────┴──────────────┴──────────────┴──────────────┴─────────────────┘
 ```
 
@@ -192,9 +209,32 @@ void lora_receive_handler(uint8_t *data, uint8_t len) {
 - **Chunk Index**: 현재 청크 인덱스 (0부터 시작)
 - **Total Chunks**: 전체 청크 개수
 - **Reserved**: 예약됨 (추후 확장용)
-- **Payload**: 실제 RTCM 데이터 (최대 124바이트)
+- **Payload**: 실제 RTCM 데이터 (최대 236바이트)
 
-### 청킹 예시
+### 청크 크기 설정
+
+`lora_queue.h`에서 LoRa 모듈의 최대 전송 크기에 맞춰 조정:
+
+```c
+// 240바이트 전송 가능한 경우
+#define LORA_MAX_CHUNK_SIZE 240
+
+// 128바이트만 가능한 경우
+#define LORA_MAX_CHUNK_SIZE 128
+```
+
+### 청킹 예시 (240바이트 청크)
+
+1029바이트 RTCM 패킷을 전송하는 경우:
+- Chunk 0: 236 bytes
+- Chunk 1: 236 bytes
+- Chunk 2: 236 bytes
+- Chunk 3: 236 bytes
+- Chunk 4: 85 bytes (나머지)
+
+**총 5개 청크** (1029 / 236 = 4.4 → 5 청크)
+
+### 청킹 예시 (128바이트 청크)
 
 1029바이트 RTCM 패킷을 전송하는 경우:
 - Chunk 0: 124 bytes
@@ -205,28 +245,59 @@ void lora_receive_handler(uint8_t *data, uint8_t len) {
 
 **총 9개 청크** (1029 / 124 = 8.3 → 9 청크)
 
+**→ 240바이트 청크 사용 시 전송 횟수가 거의 절반!**
+
 ## 성능 최적화
 
-### 1. 큐 크기 조정
+### 1. 청크 크기 최대화 ⭐ (가장 중요!)
+
+```c
+// lora_queue.h에서 조정
+#define LORA_MAX_CHUNK_SIZE 240  // LoRa 모듈의 최대 패킷 크기
+
+// 240바이트 사용 시:
+// - 1029바이트 RTCM → 5개 청크 (128바이트 대비 거의 절반)
+// - 전송 시간 대폭 감소
+```
+
+### 2. 메시지큐 방식 사용 ⭐ (권장)
+
+```c
+// ❌ 폴링 방식 (비효율적)
+while (1) {
+    if (lora_queue_get_next_chunk(...)) {
+        // 전송
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));  // CPU 낭비
+}
+
+// ✅ 메시지큐 방식 (효율적)
+while (1) {
+    xQueueReceive(notify_queue, &msg, portMAX_DELAY);  // 블로킹
+    while (lora_queue_get_next_chunk(...)) {
+        // 전송
+    }
+}
+```
+
+### 3. 큐 크기 조정
 
 ```c
 // lora_queue.h에서 조정
 #define LORA_QUEUE_SIZE 10  // 동시에 버퍼링할 RTCM 패킷 수
 ```
 
-### 2. 청크 크기 조정
+### 4. 전송 간격 조정
 
 ```c
-// lora_queue.h에서 조정
-#define LORA_MAX_CHUNK_SIZE 128  // LoRa 모듈의 최대 패킷 크기에 맞춤
+// 청크 간 간격 (LoRa 모듈 처리 속도에 맞춤)
+vTaskDelay(pdMS_TO_TICKS(50));  // 50ms
 ```
-
-### 3. 전송 속도 제어
 
 LoRa 속도가 느린 경우:
 - 큐 크기를 늘려 버퍼링
+- 청크 간 간격 증가
 - 중요하지 않은 RTCM 메시지 타입 필터링 (GNSS 모듈에서 처리)
-- 전송 간격 조정
 
 ## 디버깅
 
