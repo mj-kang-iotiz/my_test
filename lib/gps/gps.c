@@ -110,12 +110,13 @@ void gps_init(gps_t *gps)
 }
 
 /**
- * @brief RDY 문자열 검색
+ * @brief RDY 문자열 검색 (정확한 매칭: "RDY\r\n")
  */
 static bool check_for_rdy(const uint8_t *data, size_t len) {
-  if (len < 3) return false;
-  for (size_t i = 0; i <= len - 3; i++) {
-    if (data[i] == 'R' && data[i+1] == 'D' && data[i+2] == 'Y') {
+  if (len < 5) return false;
+  for (size_t i = 0; i <= len - 5; i++) {
+    if (data[i] == 'R' && data[i+1] == 'D' && data[i+2] == 'Y' &&
+        data[i+3] == '\r' && data[i+4] == '\n') {
       return true;
     }
   }
@@ -123,12 +124,13 @@ static bool check_for_rdy(const uint8_t *data, size_t len) {
 }
 
 /**
- * @brief OK 문자열 검색
+ * @brief OK 문자열 검색 (정확한 매칭: "OK\r\n")
  */
 static bool check_for_ok(const uint8_t *data, size_t len) {
-  if (len < 2) return false;
-  for (size_t i = 0; i <= len - 2; i++) {
-    if (data[i] == 'O' && data[i+1] == 'K') {
+  if (len < 4) return false;
+  for (size_t i = 0; i <= len - 4; i++) {
+    if (data[i] == 'O' && data[i+1] == 'K' &&
+        data[i+2] == '\r' && data[i+3] == '\n') {
       return true;
     }
   }
