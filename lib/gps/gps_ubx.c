@@ -101,6 +101,10 @@ uint8_t gps_parse_ubx(gps_t *gps) {
 
       if (check_ubx_chksum(gps)) {
         store_ubx_data(gps);
+        gps_msg_t msg;
+        msg.ubx.class = gps->ubx.class;
+        msg.ubx.id = gps->ubx.id;
+        gps->handler(gps, GPS_EVENT_NONE, GPS_PROTOCOL_UBX, msg);
         gps->protocol = GPS_PROTOCOL_NONE;
         gps->state = GPS_PARSE_STATE_NONE;
 

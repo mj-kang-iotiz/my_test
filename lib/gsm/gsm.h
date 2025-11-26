@@ -55,6 +55,7 @@ typedef enum {
   GSM_EVT_TCP_CLOSED,    ///< TCP 연결 종료
   GSM_EVT_TCP_DATA_RECV, ///< TCP 데이터 수신
   GSM_EVT_TCP_SEND_OK,   ///< TCP 전송 완료
+  GSM_EVT_PDP_DEACT,
 } gsm_evt_t;
 
 typedef void (*urc_handler_t)(gsm_t *gsm, const char *data,
@@ -524,17 +525,6 @@ void gsm_send_at_qisde(gsm_t *gsm, gsm_at_mode_t at_mode, uint8_t echo_on,
 void gsm_send_at_qistate(gsm_t *gsm, uint8_t query_type, uint8_t connect_id,
                          at_cmd_handler callback);
 
-/**
- * @brief AT+QICFG 전송 (TCP keep-alive 설정)
- *
- * @param gsm GSM 핸들
- * @param connect_id 소켓 ID (0-11)
- * @param enable 1: enable, 0: disable
- * @param keepidle idle time before sending first keepalive probe (초, 기본 7200)
- * @param keepinterval interval between keepalive probes (초, 기본 75)
- * @param keepcount number of probes before closing connection (기본 9)
- * @param callback 완료 콜백 (NULL이면 동기식)
- */
 void gsm_send_at_qicfg_keepalive(gsm_t *gsm, uint8_t enable,
                                   uint16_t keepidle, uint16_t keepinterval,
                                   uint8_t keepcount, at_cmd_handler callback);

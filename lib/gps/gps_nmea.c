@@ -117,6 +117,7 @@ uint8_t gps_parse_nmea_term(gps_t *gps) {
         {
             gps->nmea.msg_type = GPS_NMEA_MSG_GGA;
             
+#if defined(USE_STORE_RAW_GGA)
             gps->nmea_data.gga_raw_pos = 0;
             _gps_gga_raw_add(gps, '$');
             for(int i = 0; i < 5; i ++)
@@ -125,6 +126,7 @@ uint8_t gps_parse_nmea_term(gps_t *gps) {
             }
             _gps_gga_raw_add(gps, ',');
             gps->nmea_data.gga_is_rdy = false;
+#endif
         }
       } else if (!strncmp(msg, "RMC", 3)) {
         gps->nmea.msg_type = GPS_NMEA_MSG_RMC;

@@ -5,6 +5,7 @@
 	#define TAG "GPS"
 #endif
 
+#include "gps_types.h"
 #include "gps_nmea.h"
 #include "gps_ubx.h"
 #include "FreeRTOS.h"
@@ -17,13 +18,21 @@
 
 typedef struct {
   int (*init)(void);
+  int (*start)(void);
+  int (*stop)(void);
   int (*reset)(void);
   int (*send)(const char *data, size_t len);
   int (*recv)(char *buf, size_t len);
 } gps_hal_ops_t;
 
-typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, uint8_t msg);
+typedef void (*evt_handler)(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps_msg_t msg);
 
+
+typedef enum {
+  GPS_INIT_WAIT_READY = 0,   // RDY 대기
+  GPS_INIT_WAIT_ACK,          // ACK 대기
+  GPS_INIT_DONE               // 초기화 완료
+} gps_init_state_t;
 /**
  * @brief GPS 구조체
  *
@@ -31,6 +40,7 @@ typedef void (*evt_handler)(gps_t* gps, gps_procotol_t protocol, uint8_t msg);
 typedef struct gps_s {
   /* state */
   gps_procotol_t protocol;
+  gps_init_state_t init_state;
 
   /* os variable */
   SemaphoreHandle_t mutex;

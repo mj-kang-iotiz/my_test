@@ -78,4 +78,6 @@ void lte_set_gsm_handle(gsm_t *gsm);
  */
 void lte_network_check_timer_callback(TimerHandle_t xTimer);
 
+void lte_reinit_from_apn(void);
+
 #endif // LTE_INIT_H

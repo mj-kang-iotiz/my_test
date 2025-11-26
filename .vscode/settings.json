@@ -10,6 +10,10 @@
         "gsm.h": "c",
         "gpio.h": "c",
         "stm32f4xx_ll_rcc.h": "c",
-        "freertos.h": "c"
+        "freertos.h": "c",
+        "stdint.h": "c",
+        "gps_types.h": "c",
+        "stm32f4xx_ll_system.h": "c",
+        "gps_port.h": "c"
     }
 }

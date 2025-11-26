@@ -432,7 +432,17 @@ void handle_urc_qiurc(gsm_t *gsm, const char *data, size_t len) {
       LOG_ERR("+QIURC: \"closed\" 잘못된 connect_id=%d (최대=%d)", connect_id,
               GSM_TCP_MAX_SOCKETS);
     }
-  } else {
+  } 
+  else if (strcmp(type, "pdpdeact") == 0) {
+    // PDP context 비활성화 알림
+    uint8_t context_id = parse_uint32(&p);
+    LOG_WARN("+QIURC: \"pdpdeact\",%d - PDP context 비활성화", context_id);
+    
+    if (gsm->evt_handler.handler) {
+      gsm->evt_handler.handler(GSM_EVT_PDP_DEACT, &context_id);
+    }
+  }
+  else {
     LOG_ERR("+QIURC 알 수 없는 type=\"%s\" (data=\"%.*s\")", type, (int)len,
             data);
   }
