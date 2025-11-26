@@ -145,29 +145,18 @@ static bool check_for_ok(const uint8_t *data, size_t len) {
 void gps_parse_process(gps_t *gps, const void *data, size_t len) {
   const uint8_t *d = data;
 
-  // 초기화 중: RDY 대기
+  // 초기화 중: RDY 검출 (데이터는 계속 파싱)
   if (gps->init_state == GPS_INIT_WAIT_READY) {
     if (check_for_rdy(d, len)) {
-      gps->init_state = GPS_INIT_DONE;  // 일단 완료로 (ACK 필요 시 상위에서 변경)
+      gps->init_state = GPS_INIT_DONE;
       if (gps->handler) {
         gps->handler(gps, GPS_EVENT_READY, GPS_PROTOCOL_UNICORE, 0);
       }
+      // return 제거: NMEA/UBX 데이터도 계속 파싱
     }
-    return;  // RDY 대기 중에는 파싱하지 않음
   }
 
-  // 초기화 중: ACK 대기
-  if (gps->init_state == GPS_INIT_WAIT_ACK) {
-    if (check_for_ok(d, len)) {
-      gps->init_state = GPS_INIT_DONE;
-      if (gps->handler) {
-        gps->handler(gps, GPS_EVENT_ACK_OK, GPS_PROTOCOL_UNICORE, 0);
-      }
-    }
-    return;  // ACK 대기 중에는 파싱하지 않음
-  }
-
-  // 정상 동작: NMEA/UBX 파싱
+  // NMEA/UBX 파싱
 
   for (; len > 0; ++d, --len) {
     /* @TODO GPS_PROTOCOL_NONE 일때 start 문자 찾는걸 만들고, 프로토콜에 따라
