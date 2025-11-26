@@ -162,9 +162,9 @@ static void _add_gga_avg_data(gps_instance_t* inst, double lat, double lon, doub
  * @brief GPS 초기화 명령 전송 (모든 명령을 한번에 전송)
  */
 static void gps_send_config_commands(gps_instance_t* inst) {
-  if (!inst->handle.ops || !inst->handle.ops->send) return;
+  if (!inst->gps.ops || !inst->gps.ops->send) return;
   if (!inst->config.seq) {
-    inst->handle.init_state = GPS_INIT_DONE;
+    inst->gps.init_state = GPS_INIT_DONE;
     return;
   }
 
@@ -175,13 +175,13 @@ static void gps_send_config_commands(gps_instance_t* inst) {
   for (uint8_t i = 0; i < inst->config.seq->cmd_count; i++) {
     const gps_init_cmd_t* cmd = &inst->config.seq->cmds[i];
     LOG_INFO("GPS[%d] Cmd[%d]: %s", inst->id, i, cmd->cmd);
-    inst->handle.ops->send(cmd->cmd, strlen(cmd->cmd));
+    inst->gps.ops->send(cmd->cmd, strlen(cmd->cmd));
 
     // 명령 사이 짧은 딜레이
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 
-  inst->handle.init_state = GPS_INIT_DONE;
+  inst->gps.init_state = GPS_INIT_DONE;
   LOG_INFO("GPS[%d] All commands sent, init complete", inst->id);
 }
 
@@ -435,7 +435,7 @@ void gps_init_all(void)
 gps_t* gps_get_handle(void)
 {
   if (gps_legacy_handle != NULL) {
-    return &gps_legacy_handle->handle;
+    return &gps_legacy_handle->gps;
   }
 
   // Fallback: 첫 번째 활성화된 GPS 찾기
