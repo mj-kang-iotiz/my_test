@@ -3,6 +3,7 @@
 #include "task.h"
 #include "tcp_socket.h"
 #include "gps_app.h"
+#include "led.h"
 #include <string.h>
 
 #ifndef TAG
@@ -64,11 +65,13 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
 
     if (ret == 0 && tcp_get_socket_state(sock, NTRIP_CONNECT_ID) == GSM_TCP_STATE_CONNECTED) {
       LOG_INFO("TCP 연결 성공");
+      led_set_color(LED_ID_1, LED_COLOR_GREEN);  // ✅ 초록색 - 정상 연결
       break;  // 연결 성공
     }
 
     // ★ 연결 실패 - 강제 닫기 후 재시도
     LOG_WARN("TCP 연결 실패 (ret=%d), 강제 닫기 후 재시도...", ret);
+    led_set_color(LED_ID_1, LED_COLOR_YELLOW);  // ⚠️ 노란색 - 재시도 중
     tcp_close_force(sock);
 
     // 재시도 전 대기 (1초)
@@ -78,6 +81,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
 
   if (retry_count >= NTRIP_MAX_CONNECT_RETRY) {
     LOG_ERR("TCP 연결 최대 재시도 횟수 초과");
+    led_set_color(LED_ID_1, LED_COLOR_RED);  // ❌ 빨간색 - 연결 실패
     tcp_socket_destroy(sock);
     vTaskDelete(NULL);
     return;
@@ -141,6 +145,7 @@ static void ntrip_tcp_recv_task(void *pvParameter) {
     } else {
       // 에러
       LOG_ERR("수신 에러: %d", ret);
+      led_set_color(LED_ID_1, LED_COLOR_YELLOW);  // ⚠️ 노란색 - 수신 오류
       break;
     }
   }

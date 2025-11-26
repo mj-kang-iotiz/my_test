@@ -78,4 +78,11 @@ void lte_set_gsm_handle(gsm_t *gsm);
  */
 void lte_network_check_timer_callback(TimerHandle_t xTimer);
 
+/**
+ * @brief PDP context 비활성화 후 재초기화
+ *
+ * PDPDEACT 발생시 APN 설정부터 재시작
+ */
+void lte_reinit_from_apn(void);
+
 #endif // LTE_INIT_H
