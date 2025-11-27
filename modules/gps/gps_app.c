@@ -102,7 +102,13 @@ typedef struct {
   } config;
 
   // 명령 응답 대기용
-  gps_cmd_request_t* pending_request;
+  struct {
+    SemaphoreHandle_t done_sem;
+    char* response_buf;
+    size_t response_len;
+    bool success;
+    bool active;
+  } pending;
 } gps_instance_t;
 
 static gps_instance_t gps_instances[GPS_ID_MAX] = {0};
@@ -314,20 +320,20 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
      case GPS_EVENT_ACK_OK:
      case GPS_EVENT_ACK_FAIL:
       // 명령 응답 수신
-      if (inst->pending_request) {
-        inst->pending_request->success = (event == GPS_EVENT_ACK_OK);
+      if (inst->pending.active) {
+        inst->pending.success = (event == GPS_EVENT_ACK_OK);
 
         // 응답 버퍼에 복사
-        if (inst->pending_request->response_buf && inst->pending_request->response_len > 0) {
-          strncpy(inst->pending_request->response_buf,
+        if (inst->pending.response_buf && inst->pending.response_len > 0) {
+          strncpy(inst->pending.response_buf,
                   gps->unicore_data.response_str,
-                  inst->pending_request->response_len - 1);
-          inst->pending_request->response_buf[inst->pending_request->response_len - 1] = '\0';
+                  inst->pending.response_len - 1);
+          inst->pending.response_buf[inst->pending.response_len - 1] = '\0';
         }
 
         // 대기 중인 태스크 깨우기
-        xSemaphoreGive(inst->pending_request->done_sem);
-        inst->pending_request = NULL;
+        xSemaphoreGive(inst->pending.done_sem);
+        inst->pending.active = false;
       }
       break;
 
@@ -516,8 +522,12 @@ static void gps_cmd_task(void *pvParameter) {
         continue;
       }
 
-      // pending_request 설정
-      inst->pending_request = &req;
+      // pending 정보 설정
+      inst->pending.done_sem = req.done_sem;
+      inst->pending.response_buf = req.response_buf;
+      inst->pending.response_len = req.response_len;
+      inst->pending.success = false;
+      inst->pending.active = true;
 
       // 명령 전송
       LOG_INFO("GPS[%d] Sending cmd: %s", req.id, req.cmd);
@@ -572,11 +582,11 @@ bool gps_send_command_sync(gps_id_t id, const char* cmd, char* response,
   // 응답 대기
   bool result = false;
   if (xSemaphoreTake(req.done_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
-    result = req.success;
+    result = gps_instances[id].pending.success;
   } else {
     LOG_WARN("GPS[%d] Command timeout", id);
-    // pending_request 클리어
-    gps_instances[id].pending_request = NULL;
+    // pending 클리어
+    gps_instances[id].pending.active = false;
   }
 
   vSemaphoreDelete(req.done_sem);
