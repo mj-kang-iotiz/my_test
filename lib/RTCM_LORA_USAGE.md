@@ -366,11 +366,32 @@ while (1) {
 }
 ```
 
-### 3. 큐 크기 조정
+### 3. 큐 크기 조정 ⭐ (중요!)
 
 ```c
 // lora_queue.h에서 조정
-#define LORA_QUEUE_SIZE 10  // 동시에 버퍼링할 RTCM 패킷 수
+#define LORA_QUEUE_SIZE 20  // 동시에 버퍼링할 RTCM 패킷 수 (기본값: 20)
+```
+
+**메모리 영향**:
+- 10개: 약 10KB RAM
+- 20개: 약 20KB RAM (권장: 일반적인 경우)
+- 30개: 약 30KB RAM (권장: LoRa 속도가 매우 느린 경우, SF11-12)
+
+**큐 크기 결정 방법**:
+```
+필요한 큐 크기 = (RTCM 수신 속도 - LoRa 전송 속도) × 버퍼링 시간
+
+예시) SF9, BW 125kHz 기준:
+  - RTCM 수신: 5 packets/sec
+  - LoRa 전송: 0.33 packets/sec (1 packet ≈ 3초)
+  - 큐 부족: 4.67 packets/sec
+  - 10초 버퍼: 4.67 × 10 = 47개 필요 → 현실적으로 불가능!
+
+해결책:
+  1. RTCM 메시지 타입 필터링 (GNSS 모듈 설정)
+  2. LoRa SF 낮추기 (SF7-8 사용)
+  3. 업데이트 주기 증가 (1초 → 5초)
 ```
 
 ### 4. 전송 간격 조정
@@ -380,14 +401,16 @@ while (1) {
 vTaskDelay(pdMS_TO_TICKS(50));  // 50ms
 ```
 
-LoRa 속도가 느린 경우:
-- 큐 크기를 늘려 버퍼링
-- 청크 간 간격 증가
-- 중요하지 않은 RTCM 메시지 타입 필터링 (GNSS 모듈에서 처리)
+**LoRa 속도가 느린 경우**:
+- 큐 크기를 늘려 버퍼링 (20 → 30개)
+- 청크 간 간격 감소 (50ms → 10ms) - LoRa 모듈이 허용하는 한
+- **중요하지 않은 RTCM 메시지 타입 필터링** (GNSS 모듈에서 처리)
+  - 예: MSM7 → MSM4로 변경 (데이터 크기 약 50% 감소)
+  - GPS만 사용 (GLONASS, BDS 비활성화)
 
-## 디버깅
+## 디버깅 및 모니터링
 
-### RTCM 파싱 통계
+### 1. RTCM 파싱 통계
 
 ```c
 rtcm_parser_t *parser = &gps->rtcm;
@@ -396,17 +419,126 @@ LOG_INFO("  파싱된 패킷: %lu", parser->packet_count);
 LOG_INFO("  에러 카운트: %lu", parser->error_count);
 ```
 
-### LoRa 큐 상태
+### 2. LoRa 큐 상태 조회 ⭐ (NEW!)
 
 ```c
-LOG_INFO("LoRa 큐 상태:");
-LOG_INFO("  현재 패킷 수: %d", lora_queue_get_count(&lora_queue));
-LOG_INFO("  드롭된 패킷: %lu", lora_queue.dropped_count);
+// 기본 정보
+LOG_INFO("큐 사용: %d/%d (사용률: %d%%)",
+         lora_queue_get_count(&lora_queue),
+         LORA_QUEUE_SIZE,
+         lora_queue_get_usage_percent(&lora_queue));
+
+// 상세 통계
+const lora_queue_stats_t *stats = lora_queue_get_stats(&lora_queue);
+LOG_INFO("총 enqueue: %lu", stats->total_enqueued);
+LOG_INFO("드롭 패킷: %lu (%.1f%%)",
+         stats->total_dropped,
+         (stats->total_dropped * 100.0f) / stats->total_enqueued);
+LOG_INFO("전송 완료: %lu", stats->total_transmitted);
+LOG_INFO("최대 사용량: %d/%d", stats->peak_usage, LORA_QUEUE_SIZE);
+
+// 경고 상태 확인
+if (lora_queue_is_warning(&lora_queue)) {
+    LOG_WARN("⚠️ 큐 사용률 %d%% 초과!", LORA_QUEUE_WARNING_THRESHOLD);
+}
+```
+
+### 3. 큐 오버플로우 자동 모니터링 (권장)
+
+**방법 1: 전용 모니터링 태스크** (lib/lora/lora_example.c 참고)
+
+```c
+static void lora_monitor_task(void *pvParameter) {
+    const lora_queue_stats_t *stats;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));  // 5초마다
+
+        stats = lora_queue_get_stats(&g_lora_queue);
+        uint8_t usage = lora_queue_get_usage_percent(&g_lora_queue);
+
+        // 경고 임계값 초과 시 (기본 80%)
+        if (lora_queue_is_warning(&g_lora_queue)) {
+            LOG_WARN("⚠️ LoRa 큐 경고! 사용률 %d%%", usage);
+        }
+
+        // 패킷 드롭 발생 시
+        if (stats->total_dropped > 0) {
+            float drop_rate = (stats->total_dropped * 100.0f) / stats->total_enqueued;
+            LOG_ERR("❌ RTCM 패킷 손실: %d / %d (%.1f%%)",
+                    stats->total_dropped, stats->total_enqueued, drop_rate);
+        }
+    }
+}
+```
+
+**방법 2: enqueue 실패 시 즉시 경고**
+
+```c
+if (!lora_queue_enqueue_rtcm(&g_lora_queue, rtcm_data, rtcm_len)) {
+    LOG_WARN("❌ LoRa 큐 풀! RTCM 패킷 드롭 (사용률: %d%%)",
+             lora_queue_get_usage_percent(&g_lora_queue));
+}
+```
+
+### 4. 통계 초기화
+
+```c
+// 통계 리셋 (예: 테스트 후)
+lora_queue_reset_stats(&lora_queue);
 ```
 
 ## 주의사항
 
-1. **CRC 검증**: RTCM 패킷은 CRC24로 검증되므로 손상된 패킷은 자동으로 폐기됩니다
-2. **큐 오버플로**: LoRa 전송 속도가 RTCM 수신 속도보다 느리면 큐가 가득 찰 수 있습니다
-3. **순서 보장**: Packet ID는 256에서 순환하므로, 장시간 운영 시 중복 가능성을 고려해야 합니다
-4. **청크 손실**: LoRa 전송 중 청크가 손실되면 전체 RTCM 패킷을 재조립할 수 없습니다 (재전송 로직 필요)
+### 1. CRC 검증
+RTCM 패킷은 **CRC24**로 검증되므로 손상된 패킷은 자동으로 폐기됩니다.
+
+### 2. 큐 오버플로우 및 데이터 손실 ⚠️
+
+**문제**: LoRa 전송 속도가 RTCM 수신 속도보다 느리면 큐가 가득 차서 **데이터 손실** 발생
+
+**시나리오 예시** (SF9, BW 125kHz):
+```
+RTCM 수신 속도: 5 packets/sec (NTRIP 서버)
+LoRa 전송 속도: 0.33 packets/sec (1 packet ≈ 3초)
+큐 크기: 20개
+
+결과:
+  - 약 4초 후 큐 가득 참
+  - 이후 초당 4.67개 패킷 드롭
+  - 1분에 약 280개 패킷 손실!
+```
+
+**해결 방법**:
+
+1. **RTCM 메시지 타입 필터링** (가장 효과적!)
+   - GNSS 모듈 설정에서 필요한 메시지만 활성화
+   - MSM7 → MSM4로 변경 (크기 약 50% 감소)
+   - GPS만 사용 (GLONASS, BDS 비활성화)
+
+2. **LoRa SF 최적화**
+   - SF9-12 → SF7-8로 낮추기 (전송 속도 5-10배 증가)
+   - 단, 통신 거리는 감소
+
+3. **업데이트 주기 증가**
+   - NTRIP 업데이트: 1초 → 2-5초
+
+4. **큐 크기 증가**
+   - 20개 → 30개 (일시적 버스트 흡수용)
+   - 메모리: 약 30KB RAM 필요
+
+5. **모니터링 필수**
+   - `lora_monitor_task()` 사용
+   - 드롭률 5% 이상 시 즉시 조치
+
+### 3. 순서 보장
+Packet ID는 **0-255에서 순환**하므로, 장시간 운영 시 중복 가능성을 고려해야 합니다.
+
+### 4. 동시성 안전
+현재 구현은 **단일 Producer, 단일 Consumer** 구조입니다. 여러 태스크에서 동시에 enqueue/dequeue 시 **Mutex 보호 필요**.
+
+### 5. LoRa 모듈 처리 속도
+청크 간 간격(`vTaskDelay(50)`)은 LoRa 모듈의 **TX FIFO 크기**에 따라 조정 필요. 너무 빠르면 모듈이 처리 못함.
+
+### 6. 청크 손실
+LoRa 전송 중 청크가 손실되면 전체 RTCM 패킷을 재조립할 수 없습니다. 필요 시 재전송 로직 구현 필요.

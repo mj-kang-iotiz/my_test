@@ -12,7 +12,16 @@
 #define LORA_MAX_CHUNK_SIZE 240        // LoRa 패킷당 최대 크기 (128, 240 등)
 #define LORA_CHUNK_HEADER_SIZE 5       // 청크 헤더 크기 (패킷 타입 추가)
 #define LORA_CHUNK_PAYLOAD_SIZE (LORA_MAX_CHUNK_SIZE - LORA_CHUNK_HEADER_SIZE)
-#define LORA_QUEUE_SIZE 10             // 큐에 저장 가능한 최대 RTCM 패킷 수
+
+// LoRa 큐 크기 설정
+// 메모리 제약: 각 패킷 최대 1029 bytes
+// - 10개: 약 10KB RAM
+// - 20개: 약 20KB RAM (권장: 일반적인 경우)
+// - 30개: 약 30KB RAM (권장: LoRa 속도가 매우 느린 경우, SF11-12)
+#define LORA_QUEUE_SIZE 20             // 큐에 저장 가능한 최대 RTCM 패킷 수
+
+// Overflow 경고 임계값 (큐 사용률 %)
+#define LORA_QUEUE_WARNING_THRESHOLD 80  // 80% 이상 사용 시 경고
 
 // LoRa 패킷 타입
 typedef enum {
@@ -57,6 +66,15 @@ typedef struct {
     bool completed;           // 전송 완료 여부
 } lora_packet_t;
 
+// LoRa 큐 통계
+typedef struct {
+    uint32_t total_enqueued;    // 총 큐 추가 시도 횟수
+    uint32_t total_dropped;     // 큐 풀로 드롭된 패킷 수
+    uint32_t total_transmitted; // 전송 완료된 패킷 수
+    uint8_t peak_usage;         // 최대 큐 사용량 (패킷 수)
+    uint8_t current_usage;      // 현재 큐 사용량 (패킷 수)
+} lora_queue_stats_t;
+
 // LoRa 큐 구조체
 typedef struct {
     lora_packet_t packets[LORA_QUEUE_SIZE];
@@ -64,8 +82,9 @@ typedef struct {
     uint8_t tail;           // 큐 테일 (읽기)
     uint8_t count;          // 현재 큐에 있는 패킷 수
     uint8_t next_packet_id; // 다음 패킷 ID (0-255 순환)
-    uint32_t dropped_count; // 큐 풀로 드롭된 패킷 수
+    uint32_t dropped_count; // 큐 풀로 드롭된 패킷 수 (deprecated, use stats.total_dropped)
     QueueHandle_t notify_queue;  // 전송 태스크 알림용 메시지큐
+    lora_queue_stats_t stats;    // 큐 통계 정보
 } lora_queue_t;
 
 /**
@@ -134,5 +153,32 @@ uint8_t lora_queue_get_count(lora_queue_t *queue);
  * @param out_len 출력 길이 포인터
  */
 void lora_chunk_serialize(const lora_chunk_t *chunk, uint8_t *out_buffer, uint8_t *out_len);
+
+/**
+ * @brief 큐 사용률 반환 (0-100%)
+ * @param queue 큐 구조체 포인터
+ * @return 큐 사용률 (퍼센트)
+ */
+uint8_t lora_queue_get_usage_percent(lora_queue_t *queue);
+
+/**
+ * @brief 큐가 경고 임계값을 초과했는지 확인
+ * @param queue 큐 구조체 포인터
+ * @return true: 경고 상태, false: 정상
+ */
+bool lora_queue_is_warning(lora_queue_t *queue);
+
+/**
+ * @brief 큐 통계 정보 반환
+ * @param queue 큐 구조체 포인터
+ * @return 통계 구조체 포인터
+ */
+const lora_queue_stats_t* lora_queue_get_stats(lora_queue_t *queue);
+
+/**
+ * @brief 큐 통계 초기화 (dropped count 등)
+ * @param queue 큐 구조체 포인터
+ */
+void lora_queue_reset_stats(lora_queue_t *queue);
 
 #endif

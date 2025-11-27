@@ -25,7 +25,11 @@ void lora_init(void) {
     // LoRa 전송 태스크 생성
     xTaskCreate(lora_transmit_task, "lora_tx", 2048, NULL, tskIDLE_PRIORITY + 2, NULL);
 
-    LOG_INFO("LoRa 초기화 완료 (청크 크기: %d bytes)", LORA_MAX_CHUNK_SIZE);
+    // LoRa 큐 모니터링 태스크 생성 (선택사항)
+    xTaskCreate(lora_monitor_task, "lora_mon", 1024, NULL, tskIDLE_PRIORITY + 1, NULL);
+
+    LOG_INFO("LoRa 초기화 완료 (큐 크기: %d, 청크: %d bytes)",
+             LORA_QUEUE_SIZE, LORA_MAX_CHUNK_SIZE);
 }
 
 /**
@@ -71,6 +75,48 @@ static void lora_transmit_task(void *pvParameter) {
 }
 
 /**
+ * @brief LoRa 큐 모니터링 태스크 (선택사항)
+ *
+ * 주기적으로 큐 상태를 확인하고 경고 임계값 초과 시 로그 출력
+ */
+static void lora_monitor_task(void *pvParameter) {
+    const lora_queue_stats_t *stats;
+    uint8_t last_usage = 0;
+
+    LOG_INFO("LoRa 큐 모니터링 시작 (경고 임계값: %d%%)", LORA_QUEUE_WARNING_THRESHOLD);
+
+    while (1) {
+        // 5초마다 큐 상태 확인
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        stats = lora_queue_get_stats(&g_lora_queue);
+        uint8_t usage = lora_queue_get_usage_percent(&g_lora_queue);
+
+        // 사용률이 변경되었거나 경고 상태일 때만 로그 출력
+        if (usage != last_usage || lora_queue_is_warning(&g_lora_queue)) {
+            LOG_INFO("LoRa 큐: %d%% (%d/%d), 드롭=%d, 전송=%d",
+                     usage, stats->current_usage, LORA_QUEUE_SIZE,
+                     stats->total_dropped, stats->total_transmitted);
+
+            // 경고 임계값 초과
+            if (lora_queue_is_warning(&g_lora_queue)) {
+                LOG_WARN("⚠️ LoRa 큐 경고! 사용률 %d%% (최대: %d%%)",
+                         usage, stats->peak_usage);
+            }
+
+            last_usage = usage;
+        }
+
+        // 패킷 드롭이 발생한 경우
+        if (stats->total_dropped > 0) {
+            float drop_rate = (stats->total_dropped * 100.0f) / stats->total_enqueued;
+            LOG_ERR("❌ RTCM 패킷 손실: %d / %d (%.1f%%)",
+                    stats->total_dropped, stats->total_enqueued, drop_rate);
+        }
+    }
+}
+
+/**
  * @brief GPS 이벤트 핸들러 (RTCM 패킷을 LoRa 큐에 추가)
  */
 void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps_msg_t msg) {
@@ -87,11 +133,14 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
         if (rtcm_data) {
             // ✅ LoRa 큐에 추가 (자동으로 메시지큐 신호 전송)
             if (!lora_queue_enqueue_rtcm(&g_lora_queue, rtcm_data, rtcm_len)) {
-                LOG_WARN("LoRa 큐 풀! 패킷 드롭 (메시지 타입: %d)",
-                         rtcm_get_message_type(rtcm_data));
+                // 큐가 가득 참! 패킷 드롭 경고
+                LOG_WARN("❌ LoRa 큐 풀! RTCM 패킷 드롭 (타입: %d, 사용률: %d%%)",
+                         rtcm_get_message_type(rtcm_data),
+                         lora_queue_get_usage_percent(&g_lora_queue));
             } else {
-                LOG_DEBUG("RTCM→LoRa 큐: %d bytes, 타입=%d",
-                         rtcm_len, rtcm_get_message_type(rtcm_data));
+                LOG_DEBUG("RTCM→LoRa 큐: %d bytes, 타입=%d, 큐=%d/%d",
+                         rtcm_len, rtcm_get_message_type(rtcm_data),
+                         lora_queue_get_count(&g_lora_queue), LORA_QUEUE_SIZE);
             }
         }
     }

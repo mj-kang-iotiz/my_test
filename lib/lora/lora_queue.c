@@ -14,6 +14,9 @@ void lora_queue_init(lora_queue_t *queue, QueueHandle_t notify_queue) {
     queue->next_packet_id = 0;
     queue->dropped_count = 0;
     queue->notify_queue = notify_queue;
+
+    // 통계 초기화
+    memset(&queue->stats, 0, sizeof(lora_queue_stats_t));
 }
 
 /**
@@ -31,9 +34,13 @@ bool lora_queue_enqueue_rtcm(lora_queue_t *queue, const uint8_t *rtcm_data, uint
         return false;
     }
 
+    // 통계: 총 enqueue 시도 횟수
+    queue->stats.total_enqueued++;
+
     // 큐가 가득 찬 경우
     if (lora_queue_is_full(queue)) {
         queue->dropped_count++;
+        queue->stats.total_dropped++;
         return false;
     }
 
@@ -50,6 +57,12 @@ bool lora_queue_enqueue_rtcm(lora_queue_t *queue, const uint8_t *rtcm_data, uint
     // 큐 헤드 이동
     queue->head = (queue->head + 1) % LORA_QUEUE_SIZE;
     queue->count++;
+
+    // 통계: 현재 사용량 및 최대 사용량 업데이트
+    queue->stats.current_usage = queue->count;
+    if (queue->count > queue->stats.peak_usage) {
+        queue->stats.peak_usage = queue->count;
+    }
 
     // 전송 태스크에 신호 전송 (메시지큐 설정된 경우)
     if (queue->notify_queue) {
@@ -68,9 +81,13 @@ bool lora_queue_enqueue_status(lora_queue_t *queue, const lora_gps_status_t *sta
         return false;
     }
 
+    // 통계: 총 enqueue 시도 횟수
+    queue->stats.total_enqueued++;
+
     // 큐가 가득 찬 경우
     if (lora_queue_is_full(queue)) {
         queue->dropped_count++;
+        queue->stats.total_dropped++;
         return false;
     }
 
@@ -87,6 +104,12 @@ bool lora_queue_enqueue_status(lora_queue_t *queue, const lora_gps_status_t *sta
     // 큐 헤드 이동
     queue->head = (queue->head + 1) % LORA_QUEUE_SIZE;
     queue->count++;
+
+    // 통계: 현재 사용량 및 최대 사용량 업데이트
+    queue->stats.current_usage = queue->count;
+    if (queue->count > queue->stats.peak_usage) {
+        queue->stats.peak_usage = queue->count;
+    }
 
     // 전송 태스크에 신호 전송 (메시지큐 설정된 경우)
     if (queue->notify_queue) {
@@ -148,9 +171,15 @@ bool lora_queue_get_next_chunk(lora_queue_t *queue, lora_chunk_t *chunk) {
 void lora_queue_dequeue(lora_queue_t *queue) {
     if (!queue || lora_queue_is_empty(queue)) return;
 
+    // 통계: 전송 완료 횟수
+    queue->stats.total_transmitted++;
+
     // 큐 테일 이동
     queue->tail = (queue->tail + 1) % LORA_QUEUE_SIZE;
     queue->count--;
+
+    // 통계: 현재 사용량 업데이트
+    queue->stats.current_usage = queue->count;
 }
 
 /**
@@ -194,4 +223,37 @@ void lora_chunk_serialize(const lora_chunk_t *chunk, uint8_t *out_buffer, uint8_
     memcpy(&out_buffer[5], chunk->payload, chunk->payload_len);
 
     *out_len = LORA_CHUNK_HEADER_SIZE + chunk->payload_len;
+}
+
+/**
+ * @brief 큐 사용률 반환 (0-100%)
+ */
+uint8_t lora_queue_get_usage_percent(lora_queue_t *queue) {
+    if (!queue) return 0;
+    return (queue->count * 100) / LORA_QUEUE_SIZE;
+}
+
+/**
+ * @brief 큐가 경고 임계값을 초과했는지 확인
+ */
+bool lora_queue_is_warning(lora_queue_t *queue) {
+    if (!queue) return false;
+    return lora_queue_get_usage_percent(queue) >= LORA_QUEUE_WARNING_THRESHOLD;
+}
+
+/**
+ * @brief 큐 통계 정보 반환
+ */
+const lora_queue_stats_t* lora_queue_get_stats(lora_queue_t *queue) {
+    if (!queue) return NULL;
+    return &queue->stats;
+}
+
+/**
+ * @brief 큐 통계 초기화 (dropped count 등)
+ */
+void lora_queue_reset_stats(lora_queue_t *queue) {
+    if (!queue) return;
+    memset(&queue->stats, 0, sizeof(lora_queue_stats_t));
+    queue->dropped_count = 0;
 }
