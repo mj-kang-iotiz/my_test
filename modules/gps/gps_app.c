@@ -319,7 +319,8 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
 
      case GPS_EVENT_ACK_OK:
      case GPS_EVENT_ACK_FAIL:
-      // 명령 응답 수신
+      // 명령 응답 수신 (Critical section으로 보호)
+      taskENTER_CRITICAL();
       if (inst->pending.active) {
         inst->pending.success = (event == GPS_EVENT_ACK_OK);
 
@@ -331,9 +332,14 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
           inst->pending.response_buf[inst->pending.response_len - 1] = '\0';
         }
 
-        // 대기 중인 태스크 깨우기
-        xSemaphoreGive(inst->pending.done_sem);
+        SemaphoreHandle_t sem = inst->pending.done_sem;
         inst->pending.active = false;
+        taskEXIT_CRITICAL();
+
+        // Critical section 밖에서 세마포어 give (블로킹 가능성)
+        xSemaphoreGive(sem);
+      } else {
+        taskEXIT_CRITICAL();
       }
       break;
 
@@ -522,12 +528,14 @@ static void gps_cmd_task(void *pvParameter) {
         continue;
       }
 
-      // pending 정보 설정
+      // pending 정보 설정 (Critical section으로 보호)
+      taskENTER_CRITICAL();
       inst->pending.done_sem = req.done_sem;
       inst->pending.response_buf = req.response_buf;
       inst->pending.response_len = req.response_len;
       inst->pending.success = false;
       inst->pending.active = true;
+      taskEXIT_CRITICAL();
 
       // 명령 전송
       LOG_INFO("GPS[%d] Sending cmd: %s", req.id, req.cmd);
@@ -585,8 +593,10 @@ bool gps_send_command_sync(gps_id_t id, const char* cmd, char* response,
     result = gps_instances[id].pending.success;
   } else {
     LOG_WARN("GPS[%d] Command timeout", id);
-    // pending 클리어
+    // pending 클리어 (Critical section으로 보호)
+    taskENTER_CRITICAL();
     gps_instances[id].pending.active = false;
+    taskEXIT_CRITICAL();
   }
 
   vSemaphoreDelete(req.done_sem);

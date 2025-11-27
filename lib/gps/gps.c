@@ -176,10 +176,16 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
 
         // 아직 프로토콜 확정 안 함 (term에서 판단)
       } else if (*d == GPS_UNICORE_BIN_SYNC_1) {  // 0xAA
+        // Payload 초기화 및 첫 sync 바이트 저장
+        memset(gps->payload, 0, sizeof(gps->payload));
+        gps->pos = 0;
+        gps->payload[gps->pos++] = GPS_UNICORE_BIN_SYNC_1;
         gps->state = GPS_PARSE_STATE_UNICORE_BIN_SYNC_1;
       } else if (*d == GPS_UNICORE_BIN_SYNC_2 && gps->state == GPS_PARSE_STATE_UNICORE_BIN_SYNC_1) {  // 0x44
+        gps->payload[gps->pos++] = GPS_UNICORE_BIN_SYNC_2;
         gps->state = GPS_PARSE_STATE_UNICORE_BIN_SYNC_2;
       } else if (*d == GPS_UNICORE_BIN_SYNC_3 && gps->state == GPS_PARSE_STATE_UNICORE_BIN_SYNC_2) {  // 0x12
+        gps->payload[gps->pos++] = GPS_UNICORE_BIN_SYNC_3;
         memset(&gps->unicore_bin, 0, sizeof(gps->unicore_bin));
         gps->protocol = GPS_PROTOCOL_UNICORE;
         gps->state = GPS_PARSE_STATE_UNICORE_BIN_SYNC_3;
