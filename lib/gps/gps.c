@@ -175,6 +175,14 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
         memset(&gps->nmea, 0, sizeof(gps->nmea));
 
         // 아직 프로토콜 확정 안 함 (term에서 판단)
+      } else if (*d == GPS_UNICORE_BIN_SYNC_1) {  // 0xAA
+        gps->state = GPS_PARSE_STATE_UNICORE_BIN_SYNC_1;
+      } else if (*d == GPS_UNICORE_BIN_SYNC_2 && gps->state == GPS_PARSE_STATE_UNICORE_BIN_SYNC_1) {  // 0x44
+        gps->state = GPS_PARSE_STATE_UNICORE_BIN_SYNC_2;
+      } else if (*d == GPS_UNICORE_BIN_SYNC_3 && gps->state == GPS_PARSE_STATE_UNICORE_BIN_SYNC_2) {  // 0x12
+        memset(&gps->unicore_bin, 0, sizeof(gps->unicore_bin));
+        gps->protocol = GPS_PROTOCOL_UNICORE;
+        gps->state = GPS_PARSE_STATE_UNICORE_BIN_SYNC_3;
       } else if (*d == 0xB5) {
         gps->state = GPS_PARSE_STATE_UBX_SYNC_1;
       } else if (*d == 0x62 && gps->state == GPS_PARSE_STATE_UBX_SYNC_1) {
@@ -303,8 +311,14 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
         gps->state = GPS_PARSE_STATE_NONE;
       }
     } else if (gps->protocol == GPS_PROTOCOL_UNICORE) {
-      // UNICORE 프로토콜 파싱 (NMEA와 유사한 구조)
-      if (*d == ',') {
+      // UNICORE 바이너리 파싱
+      if (gps->state >= GPS_PARSE_STATE_UNICORE_BIN_SYNC_3 &&
+          gps->state <= GPS_PARSE_STATE_UNICORE_BIN_CRC) {
+        add_payload(gps, *d);
+        gps_parse_unicore_bin(gps);
+      }
+      // UNICORE ASCII 프로토콜 파싱 (NMEA와 유사한 구조)
+      else if (*d == ',') {
         gps_parse_unicore_term(gps);
         gps->unicore.crc ^= (uint8_t)*d;
         gps->unicore.term_str[0] = 0;
