@@ -8,6 +8,7 @@
 #include "gps_types.h"
 #include "gps_nmea.h"
 #include "gps_ubx.h"
+#include "gps_unicore.h"
 #include "rtcm.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -57,11 +58,13 @@ typedef struct gps_s {
   /* protocol header */
   gps_nmea_parser_t nmea;
   gps_ubx_parser_t ubx;
+  gps_unicore_parser_t unicore;
   rtcm_parser_t rtcm;
 
   /* info */
   gps_nmea_data_t nmea_data;
   gps_ubx_data_t ubx_data;
+  gps_unicore_data_t unicore_data;
 
   /* evt handler */
   evt_handler handler;
