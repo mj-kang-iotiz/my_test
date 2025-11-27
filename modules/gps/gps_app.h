@@ -55,4 +55,17 @@ bool gps_gga_avg_can_read(gps_id_t id);
  */
 bool gps_get_gga_avg(gps_id_t id, double* lat, double* lon, double* alt);
 
+/**
+ * @brief GPS 명령 전송 (동기식, 응답 대기)
+ *
+ * @param id GPS ID
+ * @param cmd 전송할 명령 문자열
+ * @param response 응답 버퍼 (NULL 가능)
+ * @param resp_len 응답 버퍼 크기
+ * @param timeout_ms 타임아웃 (밀리초)
+ * @return true: 성공 (OK 응답), false: 실패 (ERROR 또는 타임아웃)
+ */
+bool gps_send_command_sync(gps_id_t id, const char* cmd, char* response,
+                           size_t resp_len, uint32_t timeout_ms);
+
 #endif

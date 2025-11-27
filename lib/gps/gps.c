@@ -165,13 +165,16 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
      * 다르게 파싱하게끔 만들기 */
     if (gps->protocol == GPS_PROTOCOL_NONE) {
       if (*d == '$') {
+        // $ 다음 문자들을 확인하기 위해 임시 상태로
+        gps->state = GPS_PARSE_STATE_NMEA_START;
+
+        // NMEA 파서 초기화 (임시)
         memset(gps->nmea.term_str, 0, sizeof(gps->nmea.term_str));
         gps->nmea.term_pos = 0;
         gps->nmea.term_num = 0;
         memset(&gps->nmea, 0, sizeof(gps->nmea));
 
-        gps->protocol = GPS_PROTOCOL_NMEA;
-        gps->state = GPS_PARSE_STATE_NMEA_START;
+        // 아직 프로토콜 확정 안 함 (term에서 판단)
       } else if (*d == 0xB5) {
         gps->state = GPS_PARSE_STATE_UBX_SYNC_1;
       } else if (*d == 0x62 && gps->state == GPS_PARSE_STATE_UBX_SYNC_1) {
@@ -212,9 +215,40 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
       }
 
       if (*d == ',') {
-        gps_parse_nmea_term(gps);
-        add_nmea_chksum(gps, *d);
-        term_next(gps);
+        // 첫 term에서 프로토콜 확인
+        if (gps->state == GPS_PARSE_STATE_NMEA_START) {
+          // "command" 또는 "config"인지 확인
+          if (!strncmp(gps->nmea.term_str, "command", 7) ||
+              !strncmp(gps->nmea.term_str, "config", 6)) {
+            // UNICORE 프로토콜로 전환
+            memcpy(gps->unicore.term_str, gps->nmea.term_str, GPS_NMEA_TERM_SIZE);
+            gps->unicore.term_pos = gps->nmea.term_pos;
+            gps->unicore.term_num = 0;
+            gps->unicore.msg_type = GPS_UNICORE_MSG_NONE;
+            gps->unicore.star = 0;
+            gps->unicore.crc = 0;
+
+            gps->protocol = GPS_PROTOCOL_UNICORE;
+            gps->state = GPS_PARSE_STATE_UNICORE_START;
+
+            // UNICORE term 파싱
+            gps_parse_unicore_term(gps);
+            gps->unicore.crc ^= (uint8_t)',';
+            gps->unicore.term_str[0] = 0;
+            gps->unicore.term_pos = 0;
+            gps->unicore.term_num++;
+          } else {
+            // NMEA 프로토콜 확정
+            gps->protocol = GPS_PROTOCOL_NMEA;
+            gps_parse_nmea_term(gps);
+            add_nmea_chksum(gps, *d);
+            term_next(gps);
+          }
+        } else {
+          gps_parse_nmea_term(gps);
+          add_nmea_chksum(gps, *d);
+          term_next(gps);
+        }
       } else if (*d == '*') {
         gps_parse_nmea_term(gps);
         gps->nmea.star = 1;
@@ -267,6 +301,56 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
         rtcm_parser_reset(&gps->rtcm);
         gps->protocol = GPS_PROTOCOL_NONE;
         gps->state = GPS_PARSE_STATE_NONE;
+      }
+    } else if (gps->protocol == GPS_PROTOCOL_UNICORE) {
+      // UNICORE 프로토콜 파싱 (NMEA와 유사한 구조)
+      if (*d == ',') {
+        gps_parse_unicore_term(gps);
+        gps->unicore.crc ^= (uint8_t)*d;
+        gps->unicore.term_str[0] = 0;
+        gps->unicore.term_pos = 0;
+        gps->unicore.term_num++;
+      } else if (*d == '*') {
+        gps_parse_unicore_term(gps);
+        gps->unicore.star = 1;
+        gps->unicore.term_str[0] = 0;
+        gps->unicore.term_pos = 0;
+        gps->unicore.term_num++;
+
+        gps->state = GPS_PARSE_STATE_UNICORE_CHKSUM;
+      } else if (*d == '\r') {
+        // 체크섬 확인
+        uint8_t crc = 0;
+        if (gps->unicore.term_pos >= 2) {
+          crc = (uint8_t)((((PARSER_CHAR_HEX_TO_NUM(gps->unicore.term_str[0])) & 0x0FU) << 0x04U) |
+                          ((PARSER_CHAR_HEX_TO_NUM(gps->unicore.term_str[1])) & 0x0FU));
+        }
+
+        if (gps->unicore.crc == crc) {
+          // 응답 파싱 완료
+          gps_msg_t msg = {0};
+
+          // 이벤트 발생
+          if (gps->handler) {
+            if (gps->unicore_data.last_response == GPS_UNICORE_RESP_OK) {
+              gps->handler(gps, GPS_EVENT_ACK_OK, GPS_PROTOCOL_UNICORE, msg);
+            } else if (gps->unicore_data.last_response == GPS_UNICORE_RESP_ERROR) {
+              gps->handler(gps, GPS_EVENT_ACK_FAIL, GPS_PROTOCOL_UNICORE, msg);
+            }
+          }
+        }
+
+        gps->protocol = GPS_PROTOCOL_NONE;
+        gps->state = GPS_PARSE_STATE_NONE;
+      } else {
+        if (!gps->unicore.star) {
+          gps->unicore.crc ^= (uint8_t)*d;
+        }
+
+        if (gps->unicore.term_pos < GPS_UNICORE_TERM_SIZE - 1) {
+          gps->unicore.term_str[gps->unicore.term_pos] = *d;
+          gps->unicore.term_str[++gps->unicore.term_pos] = 0;
+        }
       }
     }
   }

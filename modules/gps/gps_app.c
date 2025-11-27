@@ -21,6 +21,21 @@ typedef struct {
   uint8_t cmd_count;
 } gps_init_sequence_t;
 
+#define GPS_CMD_MAX_LEN 256
+#define GPS_RESP_MAX_LEN 128
+
+/**
+ * @brief GPS 명령 요청 구조체
+ */
+typedef struct {
+  gps_id_t id;                          // GPS ID
+  char cmd[GPS_CMD_MAX_LEN];            // 전송할 명령
+  char* response_buf;                   // 응답 버퍼 (NULL 가능)
+  size_t response_len;                  // 응답 버퍼 크기
+  SemaphoreHandle_t done_sem;           // 완료 신호
+  bool success;                         // 성공 여부
+} gps_cmd_request_t;
+
 
 static const gps_init_cmd_t um982_base_cmds[] = {
   {"CONFIG RESET\r\n"},
@@ -85,9 +100,16 @@ typedef struct {
     const gps_init_sequence_t* seq;  // 초기화 시퀀스
     bool need_send_config;
   } config;
+
+  // 명령 응답 대기용
+  gps_cmd_request_t* pending_request;
 } gps_instance_t;
 
 static gps_instance_t gps_instances[GPS_ID_MAX] = {0};
+
+// GPS 명령 큐 및 태스크
+static QueueHandle_t gps_cmd_queue = NULL;
+static TaskHandle_t gps_cmd_task_handle = NULL;
 
 static const gps_init_sequence_t* get_init_sequence(board_type_t board) {
   static const gps_init_sequence_t um982_base_seq = {
@@ -289,6 +311,26 @@ void gps_evt_handler(gps_t* gps, gps_event_t event, gps_procotol_t protocol, gps
       }
       break;
 
+     case GPS_EVENT_ACK_OK:
+     case GPS_EVENT_ACK_FAIL:
+      // 명령 응답 수신
+      if (inst->pending_request) {
+        inst->pending_request->success = (event == GPS_EVENT_ACK_OK);
+
+        // 응답 버퍼에 복사
+        if (inst->pending_request->response_buf && inst->pending_request->response_len > 0) {
+          strncpy(inst->pending_request->response_buf,
+                  gps->unicore_data.response_str,
+                  inst->pending_request->response_len - 1);
+          inst->pending_request->response_buf[inst->pending_request->response_len - 1] = '\0';
+        }
+
+        // 대기 중인 태스크 깨우기
+        xSemaphoreGive(inst->pending_request->done_sem);
+        inst->pending_request = NULL;
+      }
+      break;
+
      default:
     	 break;
   }
@@ -455,11 +497,125 @@ static void gps_process_task(void *pvParameter) {
 
 
 
+/**
+ * @brief GPS 명령 처리 태스크
+ */
+static void gps_cmd_task(void *pvParameter) {
+  (void)pvParameter;
+
+  while (1) {
+    gps_cmd_request_t req;
+
+    // 명령 큐에서 요청 대기
+    if (xQueueReceive(gps_cmd_queue, &req, portMAX_DELAY) == pdTRUE) {
+      gps_instance_t* inst = &gps_instances[req.id];
+
+      if (!inst->enabled || !inst->gps.ops || !inst->gps.ops->send) {
+        req.success = false;
+        xSemaphoreGive(req.done_sem);
+        continue;
+      }
+
+      // pending_request 설정
+      inst->pending_request = &req;
+
+      // 명령 전송
+      LOG_INFO("GPS[%d] Sending cmd: %s", req.id, req.cmd);
+      inst->gps.ops->send(req.cmd, strlen(req.cmd));
+
+      // 응답 대기 (세마포어는 이벤트 핸들러에서 give)
+      // 여기서는 아무것도 안 함 (done_sem은 호출자가 대기)
+    }
+  }
+}
+
+/**
+ * @brief GPS 명령 전송 (동기식)
+ */
+bool gps_send_command_sync(gps_id_t id, const char* cmd, char* response,
+                           size_t resp_len, uint32_t timeout_ms) {
+  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
+    return false;
+  }
+
+  if (!cmd || strlen(cmd) >= GPS_CMD_MAX_LEN) {
+    return false;
+  }
+
+  if (!gps_cmd_queue) {
+    LOG_ERR("GPS command queue not initialized");
+    return false;
+  }
+
+  // 요청 생성
+  gps_cmd_request_t req = {0};
+  req.id = id;
+  strncpy(req.cmd, cmd, GPS_CMD_MAX_LEN - 1);
+  req.cmd[GPS_CMD_MAX_LEN - 1] = '\0';
+  req.response_buf = response;
+  req.response_len = resp_len;
+  req.done_sem = xSemaphoreCreateBinary();
+  req.success = false;
+
+  if (!req.done_sem) {
+    LOG_ERR("Failed to create semaphore");
+    return false;
+  }
+
+  // 명령 큐에 전송
+  if (xQueueSend(gps_cmd_queue, &req, pdMS_TO_TICKS(100)) != pdTRUE) {
+    vSemaphoreDelete(req.done_sem);
+    LOG_ERR("Failed to send command to queue");
+    return false;
+  }
+
+  // 응답 대기
+  bool result = false;
+  if (xSemaphoreTake(req.done_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+    result = req.success;
+  } else {
+    LOG_WARN("GPS[%d] Command timeout", id);
+    // pending_request 클리어
+    gps_instances[id].pending_request = NULL;
+  }
+
+  vSemaphoreDelete(req.done_sem);
+  return result;
+}
+
 void gps_init_all(void)
 {
   const board_config_t* config = board_get_config();
 
   LOG_INFO("GPS 초기화 시작 - 보드: %d, GPS 개수: %d", config->board, config->gps_cnt);
+
+  // GPS 명령 큐 생성
+  if (!gps_cmd_queue) {
+    gps_cmd_queue = xQueueCreate(5, sizeof(gps_cmd_request_t));
+    if (!gps_cmd_queue) {
+      LOG_ERR("GPS 명령 큐 생성 실패");
+      return;
+    }
+  }
+
+  // GPS 명령 태스크 생성
+  if (!gps_cmd_task_handle) {
+    BaseType_t ret = xTaskCreate(
+      gps_cmd_task,
+      "gps_cmd",
+      2048,
+      NULL,
+      tskIDLE_PRIORITY + 2,  // 높은 우선순위
+      &gps_cmd_task_handle
+    );
+
+    if (ret != pdPASS) {
+      LOG_ERR("GPS 명령 태스크 생성 실패");
+      return;
+    }
+
+    LOG_INFO("GPS 명령 태스크 생성 완료");
+  }
 
   for (uint8_t i = 0; i < config->gps_cnt && i < GPS_ID_MAX; i++) {
     gps_type_t type = config->gps[i];
