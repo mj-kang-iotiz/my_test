@@ -13,6 +13,7 @@ typedef enum {
   GPS_PROTOCOL_NMEA = 1,
   GPS_PROTOCOL_UBX = 2,
   GPS_PROTOCOL_UNICORE = 3,
+  GPS_PROTOCOL_RTCM = 4,
   GPS_PROTOCOL_INVALID = UINT8_MAX
 } gps_procotol_t;
 
@@ -26,6 +27,7 @@ typedef enum {
 
   /* 공통 데이터 이벤트 */
   GPS_EVENT_DATA_PARSED,  // 프로토콜 데이터 파싱 완료
+  GPS_EVENT_RTCM_PACKET,  // RTCM 패킷 파싱 완료
 
   GPS_EVENT_INVALID = UINT8_MAX
 } gps_event_t;
@@ -55,6 +57,9 @@ typedef enum {
   GPS_PARSE_STATE_UBX_CHKSUM_B = 17,
 
   /* UNICORE protocol*/
+
+  /* RTCM protocol */
+  GPS_PARSE_STATE_RTCM_PARSING = 20,
 
   GPS_PARSE_STATE_INVALID = UINT8_MAX
 } gps_parse_state_t;
