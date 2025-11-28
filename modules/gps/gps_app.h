@@ -68,4 +68,17 @@ bool gps_get_gga_avg(gps_id_t id, double* lat, double* lon, double* alt);
 bool gps_send_command_sync(gps_id_t id, const char* cmd, char* response,
                            size_t resp_len, uint32_t timeout_ms);
 
+/**
+ * @brief GPS로 Raw 데이터 전송 (UART 직접 전송)
+ *
+ * LoRa-to-GPS bridge 등에서 사용.
+ * 응답을 기다리지 않고 즉시 UART로 전송.
+ *
+ * @param id GPS ID
+ * @param data 전송할 데이터
+ * @param len 데이터 길이
+ * @return 0: 성공, -1: 실패
+ */
+int gps_send_raw_data(gps_id_t id, const uint8_t *data, size_t len);
+
 #endif

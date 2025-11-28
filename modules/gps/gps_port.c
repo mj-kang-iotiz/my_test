@@ -20,6 +20,9 @@
 static char gps_recv_buf[GPS_CNT][2048];
 static QueueHandle_t gps_queues[GPS_CNT] = {NULL};
 
+// UART TX mutex for thread-safe transmission
+static SemaphoreHandle_t gps_uart_tx_mutex = NULL;
+
 static gps_type_t uart2_gps_type = GPS_TYPE_F9P;
 //static gps_type_t uart4_gps_type = GPS_TYPE_F9P;
 static gps_id_t uart2_gps_id = GPS_ID_BASE;
@@ -178,6 +181,11 @@ int gps_rtk_start(void) {
 }
 
 int gps_uart2_send(const char *data, size_t len) {
+  // Take mutex to prevent concurrent UART transmissions
+  if (gps_uart_tx_mutex) {
+    xSemaphoreTake(gps_uart_tx_mutex, portMAX_DELAY);
+  }
+
   for (int i = 0; i < len; i++) {
     while (!LL_USART_IsActiveFlag_TXE(USART2))
       ;
@@ -186,6 +194,11 @@ int gps_uart2_send(const char *data, size_t len) {
 
   while (!LL_USART_IsActiveFlag_TC(USART2))
     ;
+
+  // Release mutex
+  if (gps_uart_tx_mutex) {
+    xSemaphoreGive(gps_uart_tx_mutex);
+  }
 
   return 0;
 }
@@ -240,6 +253,11 @@ void DMA1_Stream5_IRQHandler(void) {}
 
 int gps_port_init_instance(gps_t* gps_handle, gps_id_t id, gps_type_t type) {
   if (id >= GPS_ID_MAX) return -1;
+
+  // Create UART TX mutex (once)
+  if (gps_uart_tx_mutex == NULL) {
+    gps_uart_tx_mutex = xSemaphoreCreateMutex();
+  }
 
   const board_config_t* config = board_get_config();
 
