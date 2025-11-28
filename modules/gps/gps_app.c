@@ -603,6 +603,24 @@ bool gps_send_command_sync(gps_id_t id, const char* cmd, char* response,
   return result;
 }
 
+/**
+ * @brief GPS로 Raw 데이터 전송
+ */
+int gps_send_raw_data(gps_id_t id, const uint8_t *data, size_t len) {
+  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
+    return -1;
+  }
+
+  gps_instance_t* inst = &gps_instances[id];
+
+  if (!inst->gps.ops || !inst->gps.ops->send) {
+    return -1;
+  }
+
+  // Send directly via HAL (mutex-protected)
+  return inst->gps.ops->send((const char *)data, len);
+}
+
 void gps_init_all(void)
 {
   const board_config_t* config = board_get_config();
