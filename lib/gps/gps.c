@@ -108,6 +108,7 @@ void gps_init(gps_t *gps)
   memset(gps, 0, sizeof(*gps));
   gps->mutex = xSemaphoreCreateMutex();
   rtcm_parser_init(&gps->rtcm);
+  ubx_cmd_handler_init(&gps->ubx_cmd_handler);
 }
 
 /**

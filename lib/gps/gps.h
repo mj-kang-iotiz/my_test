@@ -67,6 +67,9 @@ typedef struct gps_s {
   gps_ubx_data_t ubx_data;
   gps_unicore_data_t unicore_data;
 
+  /* command handler */
+  ubx_cmd_handler_t ubx_cmd_handler;
+
   /* evt handler */
   evt_handler handler;
 } gps_t;
