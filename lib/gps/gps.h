@@ -69,6 +69,7 @@ typedef struct gps_s {
 
   /* command handler */
   ubx_cmd_handler_t ubx_cmd_handler;
+  ubx_init_context_t ubx_init_ctx;  // 비동기 초기화 컨텍스트
 
   /* evt handler */
   evt_handler handler;

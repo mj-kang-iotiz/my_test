@@ -185,6 +185,99 @@ ubx_send_valget(gps, UBX_LAYER_RAM, keys, 2);
 
 ---
 
+## 비동기 초기화 (추천!)
+
+**외부 태스크에서 블로킹 없이 초기화하는 방법**
+
+동기 방식(`ubx_send_valset_sync`)은 블로킹이라 다른 태스크를 방해할 수 있습니다. 비동기 초기화를 사용하면 백그라운드에서 초기화가 진행됩니다.
+
+### 비동기 초기화 API
+
+```c
+// 초기화 시작
+bool ubx_init_async_start(gps_t *gps, ubx_layer_t layer,
+                          const ubx_cfg_item_t *configs, size_t config_count,
+                          ubx_init_complete_callback_t on_complete,
+                          void *user_data);
+
+// 진행 (주기적으로 호출 필요)
+void ubx_init_async_process(gps_t *gps);
+
+// 상태 확인
+ubx_init_state_t ubx_init_async_get_state(gps_t *gps);
+
+// 취소
+void ubx_init_async_cancel(gps_t *gps);
+```
+
+### 비동기 초기화 예시
+
+```c
+// 설정 배열 (전역 또는 static으로 유지!)
+static const ubx_cfg_item_t g_configs[] = {
+    {CFG_RATE_MEAS, {100, 0}, 2},
+    {CFG_RATE_NAV, {1, 0}, 2},
+    {CFG_MSGOUT_UBX_NAV_HPPOSLLH_UART1, {1}, 1},
+};
+
+// 완료 콜백
+void on_init_done(bool success, size_t failed_step, void *user_data) {
+    if (success) {
+        printf("✓ Init completed!\n");
+    } else {
+        printf("✗ Init failed at step %zu\n", failed_step);
+    }
+}
+
+// 메인 태스크
+void main_task(void *pvParam) {
+    gps_t *gps = (gps_t *)pvParam;
+
+    // 비동기 초기화 시작
+    ubx_init_async_start(gps, UBX_LAYER_RAM,
+                         g_configs, 3,
+                         on_init_done, NULL);
+
+    // 메인 루프 (블로킹 없음!)
+    while (1) {
+        // 초기화 진행
+        ubx_init_async_process(gps);
+
+        // 다른 작업들 수행 가능
+        do_other_work();
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+```
+
+### 비동기 초기화 장점
+
+- ✅ **블로킹 없음** - 다른 태스크를 방해하지 않음
+- ✅ **자동 재시도** - NAK/타임아웃 시 자동으로 최대 3번 재시도
+- ✅ **진행 상황 추적** - `current_step`으로 진행률 확인 가능
+- ✅ **완료 콜백** - 완료 시 자동으로 콜백 호출
+- ✅ **취소 가능** - `ubx_init_async_cancel()` 호출로 중단 가능
+
+### 주의사항
+
+⚠️ **설정 배열을 반드시 전역/static으로 선언!**
+```c
+// ❌ 잘못된 예시 (스택에 생성)
+void bad_example() {
+    ubx_cfg_item_t configs[3] = {...};  // ← 함수 종료 시 사라짐!
+    ubx_init_async_start(gps, UBX_LAYER_RAM, configs, 3, ...);  // 위험!
+}
+
+// ✅ 올바른 예시 (static/전역)
+static const ubx_cfg_item_t g_configs[3] = {...};
+void good_example() {
+    ubx_init_async_start(gps, UBX_LAYER_RAM, g_configs, 3, ...);  // 안전!
+}
+```
+
+---
+
 ## 사용 방법
 
 ### 1. 기본 사용 (1개 설정 변경)

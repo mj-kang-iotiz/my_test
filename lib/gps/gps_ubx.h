@@ -131,6 +131,43 @@ typedef struct {
 } ubx_cmd_handler_t;
 
 /**
+ * @brief 비동기 초기화 상태
+ *
+ */
+typedef enum {
+  UBX_INIT_STATE_IDLE = 0,
+  UBX_INIT_STATE_RUNNING,    // 초기화 진행 중
+  UBX_INIT_STATE_DONE,       // 초기화 완료
+  UBX_INIT_STATE_ERROR,      // 초기화 실패
+} ubx_init_state_t;
+
+/**
+ * @brief 비동기 초기화 완료 콜백
+ *
+ */
+typedef void (*ubx_init_complete_callback_t)(bool success, size_t failed_step, void *user_data);
+
+/**
+ * @brief 비동기 초기화 컨텍스트
+ *
+ */
+typedef struct {
+  ubx_init_state_t state;           // 초기화 상태
+  size_t current_step;              // 현재 단계 (0부터 시작)
+  const ubx_cfg_item_t *configs;    // 설정 배열
+  size_t config_count;              // 설정 개수
+  ubx_layer_t layer;                // Layer (RAM/BBR/Flash)
+
+  // 완료 콜백
+  ubx_init_complete_callback_t on_complete;
+  void *user_data;
+
+  // 내부 상태
+  uint32_t retry_count;             // 재시도 횟수
+  uint32_t max_retries;             // 최대 재시도 횟수
+} ubx_init_context_t;
+
+/**
  * @brief UBX CFG item (VAL-SET/GET용)
  *
  */
@@ -162,6 +199,19 @@ bool ubx_send_valset_sync(gps_t *gps, ubx_layer_t layer,
 
 bool ubx_send_valget(gps_t *gps, ubx_layer_t layer,
                      const uint32_t *key_ids, size_t key_count);
+
+/* Async initialization functions */
+void ubx_init_context_init(ubx_init_context_t *ctx);
+
+bool ubx_init_async_start(gps_t *gps, ubx_layer_t layer,
+                           const ubx_cfg_item_t *configs, size_t config_count,
+                           ubx_init_complete_callback_t on_complete, void *user_data);
+
+void ubx_init_async_process(gps_t *gps);
+
+ubx_init_state_t ubx_init_async_get_state(gps_t *gps);
+
+void ubx_init_async_cancel(gps_t *gps);
 
 /* Helper functions */
 void ubx_calc_checksum(const uint8_t *data, size_t len,

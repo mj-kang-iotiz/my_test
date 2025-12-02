@@ -473,3 +473,180 @@ bool ubx_send_valget(gps_t *gps, ubx_layer_t layer,
 
   return true;
 }
+
+/**
+ * @brief 비동기 초기화 컨텍스트 초기화
+ *
+ * @param[inout] ctx 초기화 컨텍스트
+ */
+void ubx_init_context_init(ubx_init_context_t *ctx) {
+  ctx->state = UBX_INIT_STATE_IDLE;
+  ctx->current_step = 0;
+  ctx->configs = NULL;
+  ctx->config_count = 0;
+  ctx->layer = UBX_LAYER_RAM;
+  ctx->on_complete = NULL;
+  ctx->user_data = NULL;
+  ctx->retry_count = 0;
+  ctx->max_retries = 3;  // 기본 3번 재시도
+}
+
+/**
+ * @brief 비동기 초기화 내부 콜백 (다음 단계 진행)
+ *
+ * @param[in] ack ACK 여부
+ * @param[inout] user_data gps_t 포인터
+ */
+static void ubx_init_async_callback(bool ack, void *user_data) {
+  gps_t *gps = (gps_t *)user_data;
+  ubx_init_context_t *ctx = &gps->ubx_init_ctx;
+
+  if (!ack) {
+    // NAK 받음 - 재시도
+    ctx->retry_count++;
+    if (ctx->retry_count >= ctx->max_retries) {
+      // 재시도 횟수 초과 - 실패
+      ctx->state = UBX_INIT_STATE_ERROR;
+      if (ctx->on_complete) {
+        ctx->on_complete(false, ctx->current_step, ctx->user_data);
+      }
+      return;
+    }
+    // 재시도 (ubx_init_async_process()에서 재전송)
+    return;
+  }
+
+  // ACK 받음 - 다음 단계로
+  ctx->retry_count = 0;  // 재시도 카운터 리셋
+  ctx->current_step++;
+
+  if (ctx->current_step >= ctx->config_count) {
+    // 모든 단계 완료
+    ctx->state = UBX_INIT_STATE_DONE;
+    if (ctx->on_complete) {
+      ctx->on_complete(true, 0, ctx->user_data);
+    }
+  }
+  // 다음 단계는 ubx_init_async_process()에서 전송
+}
+
+/**
+ * @brief 비동기 초기화 시작
+ *
+ * @param[inout] gps GPS 구조체
+ * @param[in] layer Layer (RAM/BBR/Flash)
+ * @param[in] configs 설정 배열 (유지해야 함!)
+ * @param[in] config_count 설정 개수
+ * @param[in] on_complete 완료 콜백
+ * @param[in] user_data 콜백 데이터
+ * @return true 시작 성공, false 이미 실행 중
+ */
+bool ubx_init_async_start(gps_t *gps, ubx_layer_t layer,
+                           const ubx_cfg_item_t *configs, size_t config_count,
+                           ubx_init_complete_callback_t on_complete, void *user_data) {
+  ubx_init_context_t *ctx = &gps->ubx_init_ctx;
+
+  // 이미 실행 중이면 실패
+  if (ctx->state == UBX_INIT_STATE_RUNNING) {
+    return false;
+  }
+
+  // 컨텍스트 설정
+  ctx->state = UBX_INIT_STATE_RUNNING;
+  ctx->current_step = 0;
+  ctx->configs = configs;
+  ctx->config_count = config_count;
+  ctx->layer = layer;
+  ctx->on_complete = on_complete;
+  ctx->user_data = user_data;
+  ctx->retry_count = 0;
+
+  // 첫 번째 설정 전송
+  if (config_count > 0) {
+    if (!ubx_send_valset_cb(gps, layer, &configs[0], 1,
+                            ubx_init_async_callback, gps)) {
+      // 전송 실패
+      ctx->state = UBX_INIT_STATE_ERROR;
+      if (on_complete) {
+        on_complete(false, 0, user_data);
+      }
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * @brief 비동기 초기화 진행 (주기적으로 호출)
+ *
+ * @param[inout] gps GPS 구조체
+ */
+void ubx_init_async_process(gps_t *gps) {
+  ubx_init_context_t *ctx = &gps->ubx_init_ctx;
+
+  // 실행 중이 아니면 스킵
+  if (ctx->state != UBX_INIT_STATE_RUNNING) {
+    return;
+  }
+
+  // 명령 상태 확인
+  ubx_cmd_state_t cmd_state = ubx_get_cmd_state(&gps->ubx_cmd_handler, 3000);
+
+  if (cmd_state == UBX_CMD_STATE_WAITING) {
+    // 아직 대기 중
+    return;
+  }
+
+  if (cmd_state == UBX_CMD_STATE_TIMEOUT) {
+    // 타임아웃 - 재시도
+    ctx->retry_count++;
+    if (ctx->retry_count >= ctx->max_retries) {
+      // 재시도 횟수 초과 - 실패
+      ctx->state = UBX_INIT_STATE_ERROR;
+      if (ctx->on_complete) {
+        ctx->on_complete(false, ctx->current_step, ctx->user_data);
+      }
+      return;
+    }
+    // 재전송
+    ubx_send_valset_cb(gps, ctx->layer, &ctx->configs[ctx->current_step], 1,
+                       ubx_init_async_callback, gps);
+    return;
+  }
+
+  // ACK 또는 NAK은 콜백에서 처리됨
+  // current_step이 증가했으면 다음 설정 전송
+  if (cmd_state == UBX_CMD_STATE_ACK &&
+      ctx->current_step < ctx->config_count &&
+      ctx->state == UBX_INIT_STATE_RUNNING) {
+
+    // 다음 설정 전송
+    if (!ubx_send_valset_cb(gps, ctx->layer, &ctx->configs[ctx->current_step], 1,
+                            ubx_init_async_callback, gps)) {
+      // 전송 실패 (이미 대기 중인 명령 있음?)
+      // 다음 process()에서 재시도
+    }
+  }
+}
+
+/**
+ * @brief 비동기 초기화 상태 확인
+ *
+ * @param[in] gps GPS 구조체
+ * @return ubx_init_state_t 현재 상태
+ */
+ubx_init_state_t ubx_init_async_get_state(gps_t *gps) {
+  return gps->ubx_init_ctx.state;
+}
+
+/**
+ * @brief 비동기 초기화 취소
+ *
+ * @param[inout] gps GPS 구조체
+ */
+void ubx_init_async_cancel(gps_t *gps) {
+  ubx_init_context_t *ctx = &gps->ubx_init_ctx;
+  ctx->state = UBX_INIT_STATE_IDLE;
+  ctx->current_step = 0;
+}
