@@ -272,6 +272,11 @@ static size_t ubx_build_valset_msg(uint8_t *buf, ubx_layer_t layer,
 
   // Key/Value 쌍 추가
   for (size_t i = 0; i < item_count; i++) {
+    // Value 크기 검증
+    if (items[i].value_len > 8 || items[i].value_len == 0) {
+      return 0;  // 잘못된 value_len
+    }
+
     // Key (4 bytes, little-endian)
     buf[offset++] = (items[i].key_id >> 0) & 0xFF;
     buf[offset++] = (items[i].key_id >> 8) & 0xFF;
@@ -318,6 +323,11 @@ bool ubx_send_valset(gps_t *gps, ubx_layer_t layer,
   // 메시지 생성
   uint8_t msg[256];
   size_t msg_len = ubx_build_valset_msg(msg, layer, items, item_count);
+
+  // 메시지 생성 실패 (잘못된 value_len)
+  if (msg_len == 0) {
+    return false;
+  }
 
   // Pending 설정
   handler->pending_cls = GPS_UBX_CLASS_CFG;
@@ -373,8 +383,7 @@ bool ubx_send_valset_sync(gps_t *gps, ubx_layer_t layer,
     return false;
   }
 
-  // 폴링으로 응답 대기
-  uint32_t start = get_tick_ms();
+  // 폴링으로 응답 대기 (타임아웃은 ubx_get_cmd_state()에서 자동 체크)
   while (1) {
     ubx_cmd_state_t state = ubx_get_cmd_state(&gps->ubx_cmd_handler, timeout_ms);
 
@@ -385,12 +394,6 @@ bool ubx_send_valset_sync(gps_t *gps, ubx_layer_t layer,
       return false;
     }
     if (state == UBX_CMD_STATE_TIMEOUT) {
-      return false;
-    }
-
-    // 전체 타임아웃 체크
-    if (get_tick_ms() - start >= timeout_ms) {
-      gps->ubx_cmd_handler.state = UBX_CMD_STATE_TIMEOUT;
       return false;
     }
 

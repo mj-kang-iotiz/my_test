@@ -302,6 +302,11 @@ ubx_send_valset_sync(gps, UBX_LAYER_FLASH, items, count, 5000);
 - `U4`: 4 bytes unsigned (little-endian)
 - `L`: 1 byte boolean
 
+**중요:**
+- `ubx_cfg_item_t`의 `value` 배열은 최대 8 bytes
+- `value_len`은 1~8 사이여야 함
+- 잘못된 크기는 자동으로 거부됨
+
 전체 목록은 u-blox Interface Description 문서 참고.
 
 ---
